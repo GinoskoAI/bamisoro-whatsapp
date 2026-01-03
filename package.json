@@ -1,0 +1,6 @@
+{
+  "name": "bamisoro-whatsapp",
+  "dependencies": {
+    "axios": "^1.6.0"
+  }
+}
