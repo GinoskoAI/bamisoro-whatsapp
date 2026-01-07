@@ -9,7 +9,7 @@ export default async function handler(req, res) {
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
 
-    // Matches the "WEBHOOK_VERIFY_TOKEN" you set in Vercel
+    // STRICTLY matches the Vercel Env Variable: WEBHOOK_VERIFY_TOKEN
     if (mode === 'subscribe' && token === process.env.WEBHOOK_VERIFY_TOKEN) {
       console.log('Webhook verified successfully!');
       return res.status(200).send(challenge);
@@ -22,8 +22,13 @@ export default async function handler(req, res) {
   // PART 2: Your Existing Logic (Sending Messages)
   // ============================================================
   if (req.method === 'POST') {
-    const WHATSAPP_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN; // Make sure this matches your env var name
+    // STRICTLY matches your Vercel Env Variables
+    const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN; 
     const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+    
+    // Note: You listed WHATSAPP_BUSINESS_ACCOUNT_ID, but we don't strictly need it 
+    // for sending simple messages yet. It is good to have for future features.
+    
     const TEMPLATE_NAME = "test_bamisoro"; 
 
     const { toolName, parameters } = req.body;
@@ -49,7 +54,7 @@ export default async function handler(req, res) {
           payload,
           {
             headers: {
-              'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
+              'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
               'Content-Type': 'application/json'
             }
           }
@@ -66,8 +71,8 @@ export default async function handler(req, res) {
       }
     }
     
-    // Note: Eventually you will need code here to handle INCOMING messages from Meta
-    // For now, we just return 200 to keep Meta happy if they send a notification
+    // Handle incoming messages from Meta (Webhooks)
+    // We respond 200 OK immediately so Meta doesn't keep retrying
     return res.status(200).json({ status: "ok" });
   }
 
