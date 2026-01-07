@@ -1,22 +1,28 @@
 import axios from 'axios';
 
 export default async function handler(req, res) {
+  // 1. Only allow POST requests
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
+  // 2. Load Credentials from Vercel Environment Variables
   const WHATSAPP_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
   const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
-  const TEMPLATE_NAME = "thank_you_for_the_call"; 
+  
+  // UPDATE THIS to the exact name of the template that worked for you
+  const TEMPLATE_NAME = "test_bamisoro"; 
 
   const { toolName, parameters } = req.body;
 
-  if (toolName === "send_whatsapp_template") {
+  if (toolName === "send_whatsapp") {
     try {
+      // 3. Extract parameters from Ultravox
       const { customer_name, call_summary, target_phone } = parameters;
 
-      if (!target_phone) return res.status(400).json({ error: "No phone number" });
+      console.log(`Sending WhatsApp to ${target_phone}`);
 
+      // 4. Construct the Payload (Text Only - No Image)
       const payload = {
         messaging_product: "whatsapp",
         to: target_phone,
@@ -27,16 +33,21 @@ export default async function handler(req, res) {
           components: [
             {
               type: "header",
-              parameters: [{ type: "text", text: customer_name }]
+              parameters: [
+                { type: "text", text: customer_name || "Valued Customer" }
+              ]
             },
             {
               type: "body",
-              parameters: [{ type: "text", text: call_summary }]
+              parameters: [
+                { type: "text", text: call_summary || "Here is your summary." }
+              ]
             }
           ]
         }
       };
 
+      // 5. Send to Meta
       await axios.post(
         `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`,
         payload,
@@ -48,10 +59,14 @@ export default async function handler(req, res) {
         }
       );
 
-      return res.status(200).json({ result: "Message sent", type: "text" });
+      return res.status(200).json({ 
+        result: "Message sent successfully.", 
+        type: "text" 
+      });
 
     } catch (error) {
-      return res.status(500).json({ error: error.message });
+      console.error("Meta Error:", error.response?.data || error.message);
+      return res.status(500).json({ error: "Failed to send message" });
     }
   }
 
