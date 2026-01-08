@@ -1,5 +1,4 @@
-import axios from 'axios';
-
+// pages/api/webhook.js
 export default async function handler(req, res) {
   // ============================================================
   // PART 1: Handle Meta Webhook Verification (The "Handshake")
@@ -9,7 +8,7 @@ export default async function handler(req, res) {
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
 
-    // STRICTLY matches the Vercel Env Variable: WEBHOOK_VERIFY_TOKEN
+    // STRICTLY matches the Vercel Env Variable
     if (mode === 'subscribe' && token === process.env.WEBHOOK_VERIFY_TOKEN) {
       console.log('Webhook verified successfully!');
       return res.status(200).send(challenge);
@@ -22,18 +21,12 @@ export default async function handler(req, res) {
   // PART 2: Your Existing Logic (Sending Messages)
   // ============================================================
   if (req.method === 'POST') {
-    // STRICTLY matches your Vercel Env Variables
-    const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN; 
+    const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
     const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
-    
-    // Note: You listed WHATSAPP_BUSINESS_ACCOUNT_ID, but we don't strictly need it 
-    // for sending simple messages yet. It is good to have for future features.
-    
-    const TEMPLATE_NAME = "test_bamisoro"; 
+    const TEMPLATE_NAME = "test_bamisoro";
 
     const { toolName, parameters } = req.body;
 
-    // Check if this is your internal tool calling the API
     if (toolName === "send_whatsapp") {
       try {
         const { target_phone } = parameters;
@@ -45,34 +38,41 @@ export default async function handler(req, res) {
           type: "template",
           template: {
             name: TEMPLATE_NAME,
-            language: { code: "en" } 
+            language: { code: "en" }
           }
         };
 
-        await axios.post(
+        // USING FETCH INSTEAD OF AXIOS (No installation needed)
+        const response = await fetch(
           `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`,
-          payload,
           {
+            method: 'POST',
             headers: {
               'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
               'Content-Type': 'application/json'
-            }
+            },
+            body: JSON.stringify(payload)
           }
         );
 
-        return res.status(200).json({ 
-          result: "Message sent successfully.", 
-          type: "text" 
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(JSON.stringify(data));
+        }
+
+        return res.status(200).json({
+          result: "Message sent successfully.",
+          type: "text"
         });
 
       } catch (error) {
-        console.error("Meta Error:", error.response?.data || error.message);
+        console.error("Meta Error:", error.message);
         return res.status(500).json({ error: "Failed to send message" });
       }
     }
-    
-    // Handle incoming messages from Meta (Webhooks)
-    // We respond 200 OK immediately so Meta doesn't keep retrying
+
+    // Handle incoming messages from Meta
     return res.status(200).json({ status: "ok" });
   }
 
