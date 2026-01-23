@@ -1,25 +1,25 @@
 // api/webhook.js
+import { createClient } from '@supabase/supabase-js';
+
+// Initialize the Database Connection
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+
 export default async function handler(req, res) {
   // ============================================================
-  // CONFIGURATION: System Prompt (JSON Mode)
+  // CONFIGURATION: System Prompt
   // ============================================================
   const SYSTEM_PROMPT = `
-  You are Bamisoro, an AI assistant for Nigerian businesses.
+  You are Bamisoro, a smart AI assistant for Nigerian businesses.
   
   CRITICAL: You must ALWAYS reply in strict JSON format.
   
-  Your goal is to choose the best way to reply to the user.
-  
-  1. FOR SIMPLE MESSAGES:
-     Reply: { "type": "text", "body": "Your text here" }
+  1. FOR TEXT REPLIES:
+     Reply: { "type": "text", "body": "Your answer here" }
      
-  2. FOR CHOICES (Use this when asking the user to pick something):
-     Reply: { "type": "button", "body": "Please make a selection:", "options": ["Option 1", "Option 2", "Option 3"] }
+  2. FOR BUTTON CHOICES:
+     Reply: { "type": "button", "body": "Choose:", "options": ["A", "B"] }
 
-  3. FOR LISTS (Use this for 4+ options):
-     Reply: { "type": "list", "body": "Select an item:", "button_text": "Menu", "sections": [{"title": "Items", "rows": [{"id": "1", "title": "Item A"}]}] }
-
-  If the user sends AUDIO: Listen to it, understand the intent, and reply as if they typed it.
+  Context: You have access to the user's past conversation history. Use it to be personal and helpful.
   `;
 
   // 1. Verify Webhook (GET)
@@ -37,61 +37,43 @@ export default async function handler(req, res) {
     if (body.object && body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages) {
       const message = body.entry[0].changes[0].value.messages[0];
       const senderPhone = message.from;
-      const msgType = message.type;
+      
+      // Get User Input
+      let userInput = "";
+      if (message.type === "text") userInput = message.text.body;
+      else if (message.type === "audio") userInput = "[User sent a voice note]"; 
+      else if (message.type === "interactive") userInput = message.interactive.button_reply?.title || message.interactive.list_reply?.title;
 
-      console.log(`📩 New Message Type: ${msgType}`);
+      if (userInput) {
+        try {
+          // --- STEP A: RETRIEVE MEMORY FROM SUPABASE ---
+          // Fetch last 10 messages for this phone number
+          const { data: historyData, error } = await supabase
+            .from('messages')
+            .select('role, content')
+            .eq('user_phone', senderPhone)
+            .order('id', { ascending: false })
+            .limit(10);
 
-      // Prepare Gemini Payload
-      let geminiParts = [];
+          // Format history for Gemini (Oldest first)
+          // Map 'assistant' role to 'model' for Gemini API
+          const chatHistory = (historyData || []).reverse().map(msg => ({
+            role: msg.role === 'assistant' ? 'model' : 'user',
+            parts: [{ text: msg.content }]
+          }));
 
-      try {
-        // --- HANDLE AUDIO ---
-        if (msgType === "audio") {
-          const mediaId = message.audio.id;
-          const headers = { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` };
+          // Add the NEW message to the conversation
+          const currentTurn = { role: "user", parts: [{ text: userInput }] };
+          const fullConversation = [...chatHistory, currentTurn];
 
-          // A. Get the Media URL from Meta
-          const urlRes = await fetch(`https://graph.facebook.com/v21.0/${mediaId}`, { headers });
-          const urlJson = await urlRes.json();
-          const mediaUrl = urlJson.url;
-
-          // B. Download the Binary Data
-          const binaryRes = await fetch(mediaUrl, { headers });
-          const arrayBuffer = await binaryRes.arrayBuffer();
-          const base64Audio = Buffer.from(arrayBuffer).toString('base64');
-
-          // C. Add to Gemini Payload (Multimodal)
-          geminiParts.push({
-            inline_data: {
-              mime_type: "audio/ogg", 
-              data: base64Audio
-            }
-          });
-          geminiParts.push({ text: "The user sent this voice note. Reply to it directly." });
-          
-          console.log("🎤 Audio downloaded and attached.");
-        } 
-        
-        // --- HANDLE TEXT ---
-        else if (msgType === "text") {
-          geminiParts.push({ text: message.text.body });
-        } 
-        
-        // --- HANDLE INTERACTIVE (Buttons) ---
-        else if (msgType === "interactive") {
-          const selection = message.interactive.button_reply ? message.interactive.button_reply.title : message.interactive.list_reply.title;
-          geminiParts.push({ text: `User selected button: ${selection}` });
-        }
-
-        // --- SEND TO GEMINI ---
-        if (geminiParts.length > 0) {
+          // --- STEP B: ASK GEMINI (With History) ---
           const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
           
           const geminiResponse = await fetch(geminiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              contents: [{ role: "user", parts: geminiParts }],
+              contents: fullConversation, // Send the whole history!
               system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
               generationConfig: { responseMimeType: "application/json" }
             })
@@ -100,66 +82,36 @@ export default async function handler(req, res) {
           const geminiData = await geminiResponse.json();
           let aiRawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
           aiRawText = aiRawText.replace(/```json|```/g, "").trim();
-
-          console.log("🤖 AI Response:", aiRawText);
           const aiInstruction = JSON.parse(aiRawText);
 
-          // --- EXECUTE WHATSAPP ACTIONS ---
-          const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
-          const HEADERS = {
-            'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
-            'Content-Type': 'application/json'
-          };
+          // --- STEP C: SAVE TO DATABASE (Write Memory) ---
+          // 1. Save User Message
+          await supabase.from('messages').insert({ user_phone: senderPhone, role: 'user', content: userInput });
+          
+          // 2. Save AI Reply (The body text)
+          if (aiInstruction.body) {
+             await supabase.from('messages').insert({ user_phone: senderPhone, role: 'assistant', content: aiInstruction.body });
+          }
 
+          // --- STEP D: SEND TO WHATSAPP ---
+          const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
+          const HEADERS = { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' };
           let payload = {};
 
           if (aiInstruction.type === "text") {
-            payload = {
-              messaging_product: "whatsapp",
-              to: senderPhone,
-              text: { body: aiInstruction.body }
-            };
+            payload = { messaging_product: "whatsapp", to: senderPhone, text: { body: aiInstruction.body } };
           } else if (aiInstruction.type === "button") {
-            const buttons = aiInstruction.options.map((opt, i) => ({
-              type: "reply",
-              reply: { id: `btn_${i}`, title: opt.substring(0, 20) } // Max 20 chars
-            }));
-            payload = {
-              messaging_product: "whatsapp",
-              to: senderPhone,
-              type: "interactive",
-              interactive: {
-                type: "button",
-                body: { text: aiInstruction.body },
-                action: { buttons: buttons }
-              }
-            };
-          } else if (aiInstruction.type === "list") {
-             // Basic list support
-             payload = {
-              messaging_product: "whatsapp",
-              to: senderPhone,
-              type: "interactive",
-              interactive: {
-                type: "list",
-                body: { text: aiInstruction.body },
-                action: {
-                  button: aiInstruction.button_text || "Menu",
-                  sections: aiInstruction.sections
-                }
-              }
-            };
+             const buttons = aiInstruction.options.map((opt, i) => ({ type: "reply", reply: { id: `btn_${i}`, title: opt.substring(0, 20) } }));
+             payload = { messaging_product: "whatsapp", to: senderPhone, type: "interactive", interactive: { type: "button", body: { text: aiInstruction.body }, action: { buttons: buttons } } };
           }
 
-          if (payload.messaging_product) {
-            await fetch(WHATSAPP_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
-          }
-        }
-      } catch (error) {
-        console.error("Handler Error:", error);
+          if (payload.messaging_product) await fetch(WHATSAPP_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
+
+        } catch (error) { console.error("Agent Error:", error); }
       }
     }
     return res.status(200).json({ status: "ok" });
   }
+
   return res.status(405).json({ error: 'Method Not Allowed' });
 }
