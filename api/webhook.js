@@ -1,6 +1,6 @@
 // api/webhook.js
 export default async function handler(req, res) {
-  // 1. Meta Webhook Verification (Keep this!)
+  // 1. Meta Webhook Verification (GET)
   if (req.method === 'GET') {
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
@@ -13,32 +13,53 @@ export default async function handler(req, res) {
 
   // 2. Handle Incoming Messages (POST)
   if (req.method === 'POST') {
-    // Log the entire package from Meta so we can see it in Vercel
-    console.log("⬇️ INCOMING WEBHOOK:", JSON.stringify(req.body, null, 2));
-
     const body = req.body;
 
-    // Check if this is a message from a user
-    if (body.object) {
-      if (
-        body.entry &&
-        body.entry[0].changes &&
-        body.entry[0].changes[0].value.messages &&
-        body.entry[0].changes[0].value.messages[0]
-      ) {
-        const message = body.entry[0].changes[0].value.messages[0];
-        const senderPhone = message.from;
-        const messageText = message.text ? message.text.body : "No text (Media/Status)";
+    // Check if it's a valid message
+    if (body.object && body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages) {
+      const message = body.entry[0].changes[0].value.messages[0];
+      const senderPhone = message.from; // The user's phone number
+      const messageText = message.text ? message.text.body : "";
 
-        console.log(`📩 MESSAGE RECEIVED!`);
-        console.log(`From: ${senderPhone}`);
-        console.log(`Text: ${messageText}`);
-        
-        // TODO: This is where we will add the AI logic later
+      console.log(`📩 Received from ${senderPhone}: ${messageText}`);
+
+      // ONLY reply if there is text (avoid infinite loops with status updates)
+      if (messageText) {
+        try {
+          // Send a reply back to WhatsApp
+          const WHATSAPP_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
+          const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+
+          const response = await fetch(
+            `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`,
+            {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                messaging_product: "whatsapp",
+                to: senderPhone,
+                text: { body: `Bamisoro heard you say: "${messageText}"` }
+              })
+            }
+          );
+          
+          if (!response.ok) {
+            const errData = await response.json();
+            console.error("Meta API Error:", errData);
+          } else {
+            console.log("✅ Reply sent successfully!");
+          }
+
+        } catch (error) {
+          console.error("Fetch Error:", error);
+        }
       }
     }
 
-    // Always return 200 OK immediately
+    // Always return 200 OK to Meta immediately
     return res.status(200).json({ status: "ok" });
   }
 
