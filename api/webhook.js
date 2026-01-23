@@ -44,7 +44,8 @@ export default async function handler(req, res) {
       if (messageText) {
         try {
           // A. ASK GEMINI (The "Brain")
-          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+          // Updated to use the specific 2.5 Flash Lite model
+const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
           
           const geminiResponse = await fetch(geminiUrl, {
             method: 'POST',
