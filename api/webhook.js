@@ -62,9 +62,155 @@ export default async function handler(req, res) {
        - Answers questions, follows up, and guides next steps.
      - **EMAIL Capabilities:**
        - We are now deploying Conversational Email AI agents.
+        - **ADDITIONAL BAMISORO INFO:**
+        -The Challenge for Enterprises
+Customer service in Africa faces issues: slow responses, high costs, and language barriers. Businesses struggle to support and meet customer needs promptly.
+Rising Support Costs
+Scaling human teams for high call volumes is expensive.
+Customer Churn
+Failing to re-engage a churned customer within 7 days reduces the chance of winning them back by 80%.
+Impersonal Service
+As you grow, the personal touch is lost to generic systems, making you just like everyone else.
+
+The voices you are missing
+Aisha, The Frequent Caller
+Loyal but anxious, she calls again and again for updates that never come fast enough. She repeats herself for each call leading to frustrations.
+Maxwell, The Busy Executive
+Spots your ad after hours, calls in excitement—but no one answers, and the lead goes cold. Maxwell never engages again.
+Chika, The Silent Churner
+She used to be a regular customer but quietly left. It’s impossible for your team to personally call the thousands of "Chikas" in your database.
+
+Our Solution: Bamisoro
+Bamisoro is an enterprise-grade AI call center platform that automates inbound, outbound, and web calls through natural, human-like voice interactions. Here are some of the things Bamisoro helps your business do:
+•
+Generates detailed call analytics, sentiment tracking, and actionable insights.
+•
+Automatically records, transcribes, and summarizes every conversation.
+•
+Enables seamless human takeover during live interactions when required.
+•
+Centralizes data with an integrated CRM that builds your customer database effortlessly.
+•
+Extend functionality through integrations that manage appointments, messages, and client updates.
+
+Bamisoro: Value Across Your Organization
+See how Bamisoro delivers impactful results for various departments.
+Operations :
+Automate thousands of routine inbound calls, freeing human agents and cutting costs.
+Handle massive spikes in call volume without hiring more staff.
+Sales :
+Engage hot leads in seconds, not hours. Automatically schedule more qualified meetings for
+your team.
+Marketing :
+Deploy personalized win-back and loyalty calls to thousands. Maintain the personal touch
+that earned your customers' loyalty as you scale
+
+The voices you are missing
+Aisha, The Frequent Caller
+Loyal but anxious, she calls again and again for updates that never come fast enough. She repeats herself for each call leading to frustrations.
+Maxwell, The Busy Executive
+Spots your ad after hours, calls in excitement—but no one answers, and the lead goes cold. Maxwell never engages again.
+Chika, The Silent Churner
+She used to be a regular customer but quietly left. It’s impossible for your team to personally call the thousands of "Chikas" in your database.
+
+Bamisoro Today: Proving Our Impact
+Multi-Language AI Voices
+Deployed
+Our AI voices are actively engaging
+customers in multiple languages,
+with Yoruba, Igbo, Hausa, and Pidgin
+live.
+Advanced Post-Call
+Analytics
+Sophisticated sentiment
+tracking and KPI monitoring are
+providing deep operational
+insights for enterprises.
+Batch Campaigns &
+Enterprise Dashboards
+Batch campaign execution and
+enterprise dashboards for reaching
+10,000s in a few minutes are live,
+empowering data-driven decisions.
+Inbuilt CRM and 3rd Party Integration
+MVP of our inbuilt CRM that that records and tracks
+customers that have been reached through Bamisoro.
+Successful Pilots
+Currently running successful pilots with early
+adopters in FMCG, e-commerce, and logistics
+sectors. Cost Structure
+•
+1 AI call minute = 1 Credit
+•
+Calls and other activities such as phone rental, sending SMS consume credits
+•
+1 credit costs ₦145
+Pricing
+•
+Usage-based (per campaign / per minute)
+•
+₦450k/month Enterprise Premium License
+•
+Account management
+•
+Priority infra
+•
+Advanced analytics
+Gross Margin
+•
+~15% per call minute
+•
+Improves with scale
+Scalability
+•
+AWS + Azure infrastructure partnerships
+•
+Designed to handle growth from 100k → 5m calls/month
+
+preencoded.png
+Early Traction: Momentum & Milestones
+FINANCIAL IMPACT STRATEGIC EXPANSION
+INDUSTRY VALIDATION
+• Nvidia Inception Partner.
+• Microsoft for Founders Program.
+GROWTH PIPELINE
+• Active conversations with over 25 enterprises are
+ongoing, building a robust sales pipeline for future
+growth.
+•₦2,000,000+ in revenue generated from early PoC
+campaigns since beta launch.
+•On track to close a $20,000 enterprise deal in January
+2026.
+•Five pilot campaigns confirmed and on track to launch in
+January 2026.
+•A reseller partnership program with five enterprise
+companies set to go live in January 2026.
+• AWS startup program
+
+How Bamisoro Generates Revenue
+Our diversified business model ensures sustainable growth and caters to a broad range of enterprise needs.
+Subscription Model
+Recurring revenue from enterprise access to our AI agents and advanced dashboard features.
+Pay-per-Call
+Volume-based pricing tailored for high-call enterprises, offering flexibility and cost-efficiency.
+Add-on Services
+Premium offerings including advanced analytics, bespoke multilingual voices, and deep workflow integrations.
+Pilot-to-Enterprise Conversion
+Strategic low-cost pilot campaigns designed to demonstrate ROI and convert into full-scale enterprise partnerships.
+
+Experienced Founders: Our Strength
+Muyiwa Ogundiya – Founder & CEO
+A visionary in AI innovation, enterprise automation, and product strategy, guiding Bamisoro's growth.
+Farouq Komolafe-Taylor: Technical Lead
+Results-driven Full Stack Web and Mobile Software Engineer with years of experience delivering scalable, secure, and user-centric applications in Agile environments.
+Doris Innocent – Operations Lead
+Proven track record in enterprise go-to-market strategies and successful client acquisition.
+Michael Enudi – Chief AI Scientist
+Deep expertise in AI/ML systems, multilinguaL tts (TTS), and enterprise-scale deployment.
+
 
   3. **THE VISION (Omnichannel):**
-     - "One system for calls, WhatsApp, and Email."
+     - "One system for calls, WhatsApp chat and calls, and Email."
      - Shared memory and context across channels.
      - Less manual work, more consistency.
 
