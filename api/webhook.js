@@ -1,19 +1,8 @@
 // api/webhook.js
-// NO IMPORTS, NO REQUIRES. PURE FETCH.
+// --- NO IMPORTS, NO REQUIRES. PURE JAVASCRIPT. ---
 
 export default async function handler(req, res) {
-  // ============================================================
-  // CONFIGURATION
-  // ============================================================
-  const SYSTEM_PROMPT = `
-  You are Bamisoro, a smart AI assistant for Nigerian businesses.
-  CRITICAL: Reply in strict JSON format.
-  1. TEXT: { "type": "text", "body": "..." }
-  2. BUTTONS: { "type": "button", "body": "...", "options": ["..."] }
-  Context: Use the conversation history provided.
-  `;
-
-  // HELPER: Talk to Supabase via REST API (No Library Needed!)
+  // 1. HELPER: Talk to Supabase via standard Fetch (No library needed)
   async function supabaseRequest(endpoint, method, body = null) {
     const url = `${process.env.SUPABASE_URL}/rest/v1/${endpoint}`;
     const headers = {
@@ -22,15 +11,22 @@ export default async function handler(req, res) {
       'Content-Type': 'application/json',
       'Prefer': 'return=minimal'
     };
-    
     const options = { method, headers };
     if (body) options.body = JSON.stringify(body);
-    
     const response = await fetch(url, options);
     return response.ok ? response.json() : null;
   }
 
-  // 1. Verify Webhook (GET)
+  // 2. CONFIGURATION: System Prompt
+  const SYSTEM_PROMPT = `
+  You are Bamisoro.
+  CRITICAL: Reply in strict JSON format.
+  1. TEXT: { "type": "text", "body": "..." }
+  2. BUTTONS: { "type": "button", "body": "...", "options": ["..."] }
+  Context: Use the conversation history provided.
+  `;
+
+  // 3. Verify Webhook (GET)
   if (req.method === 'GET') {
     if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === process.env.WEBHOOK_VERIFY_TOKEN) {
       return res.status(200).send(req.query['hub.challenge']);
@@ -38,7 +34,7 @@ export default async function handler(req, res) {
     return res.status(403).json({ error: 'Verification failed.' });
   }
 
-  // 2. Handle Messages (POST)
+  // 4. Handle Messages (POST)
   if (req.method === 'POST') {
     const body = req.body;
     if (body.object && body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages) {
@@ -52,10 +48,9 @@ export default async function handler(req, res) {
 
       if (userInput) {
         try {
-          console.log("🔍 Fetching history for:", senderPhone);
+          console.log("🔍 processing for:", senderPhone);
 
-          // --- STEP A: READ MEMORY (via Fetch) ---
-          // URL: /messages?user_phone=eq.PHONE&order=id.desc&limit=10
+          // A. READ MEMORY
           const historyUrl = `messages?user_phone=eq.${senderPhone}&order=id.desc&limit=10&select=role,content`;
           const historyData = await supabaseRequest(historyUrl, 'GET') || [];
 
@@ -66,7 +61,7 @@ export default async function handler(req, res) {
 
           const fullConversation = [...chatHistory, { role: "user", parts: [{ text: userInput }] }];
 
-          // --- STEP B: ASK GEMINI ---
+          // B. ASK GEMINI
           const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
           const geminiResponse = await fetch(geminiUrl, {
             method: 'POST',
@@ -83,16 +78,13 @@ export default async function handler(req, res) {
           aiRawText = aiRawText.replace(/```json|```/g, "").trim();
           const aiInstruction = JSON.parse(aiRawText);
 
-          // --- STEP C: WRITE MEMORY (via Fetch) ---
-          // 1. Save User Message
+          // C. WRITE MEMORY
           await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'user', content: userInput });
-          
-          // 2. Save AI Reply
           if (aiInstruction.body) {
              await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'assistant', content: aiInstruction.body });
           }
 
-          // --- STEP D: REPLY TO WHATSAPP ---
+          // D. REPLY TO WHATSAPP
           const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
           const HEADERS = { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' };
           let payload = {};
