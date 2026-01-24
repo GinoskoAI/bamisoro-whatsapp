@@ -1,5 +1,5 @@
 // api/send-message.js
-// VERSION: Compliance-Ready (Uses Templates for guaranteed delivery)
+// VERSION: Debug Mode (Returns exact Meta error)
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
@@ -17,22 +17,21 @@ export default async function handler(req, res) {
       'Content-Type': 'application/json' 
     };
 
-    // --- LOGIC SWITCH: TEMPLATE VS FREE-FORM ---
-    // Since we don't know if the window is open, we play it safe and ALWAYS use the template.
-    // Ensure you created a template named "voice_follow_up" with one variable {{1}}
-    
     const payload = {
       messaging_product: "whatsapp",
       to: phone,
       type: "template",
       template: {
-        name: "voice_follow_up", // <--- MUST MATCH YOUR META TEMPLATE NAME
-        language: { code: "en_US" }, // or "en_GB" depending on what you chose
+        name: "bamisoro_voice_handoff", // <--- CHECK THIS IN META MANAGER
+        language: { code: "en_US" },     // <--- CHECK THIS (Is it en_US, en_GB, or en?)
         components: [
           {
             type: "body",
             parameters: [
-              { type: "text", text: message } // This inserts your message into {{1}}
+              { 
+                type: "text", 
+                text: message 
+              } 
             ]
           }
         ]
@@ -49,10 +48,12 @@ export default async function handler(req, res) {
 
     if (!metaResponse.ok) {
       console.error("Meta Error:", metaData);
-      return res.status(500).json({ error: 'Failed to send WhatsApp Template' });
+      // RETURN THE ACTUAL ERROR TO ULTRAVOX SO YOU CAN SEE IT
+      return res.status(500).json({ error: 'Meta Rejected Request', details: metaData });
     }
 
-    // 2. Log to Supabase (So the Chatbot remembers this context!)
+    // ... (Logging to Supabase logic remains here) ...
+    // LOG TO SUPABASE
     const supabaseUrl = `${process.env.SUPABASE_URL}/rest/v1/messages`;
     const supabaseHeaders = {
       'apikey': process.env.SUPABASE_KEY,
@@ -67,14 +68,14 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         user_phone: phone,
         role: 'assistant',
-        content: `[Voice Agent Sent Template]: ${message}`
+        content: `[Voice Agent Follow-up]: ${message}`
       })
     });
 
-    return res.status(200).json({ status: 'Template sent & logged' });
+    return res.status(200).json({ status: 'Handoff complete' });
 
   } catch (error) {
     console.error("API Error:", error);
-    return res.status(500).json({ error: 'Internal Server Error' });
+    return res.status(500).json({ error: 'Internal Server Error', details: error.message });
   }
 }
