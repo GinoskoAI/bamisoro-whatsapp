@@ -1,27 +1,34 @@
 // api/webhook.js
-// USE REQUIRE INSTEAD OF IMPORT (Safer for Vercel)
-const { createClient } = require('@supabase/supabase-js');
-
-// Initialize the Database
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+// NO IMPORTS, NO REQUIRES. PURE FETCH.
 
 export default async function handler(req, res) {
   // ============================================================
-  // CONFIGURATION: System Prompt
+  // CONFIGURATION
   // ============================================================
   const SYSTEM_PROMPT = `
   You are Bamisoro, a smart AI assistant for Nigerian businesses.
-  
-  CRITICAL: You must ALWAYS reply in strict JSON format.
-  
-  1. FOR TEXT REPLIES:
-     Reply: { "type": "text", "body": "Your answer here" }
-     
-  2. FOR BUTTON CHOICES:
-     Reply: { "type": "button", "body": "Choose:", "options": ["A", "B"] }
-
-  Context: You have access to the user's past conversation history.
+  CRITICAL: Reply in strict JSON format.
+  1. TEXT: { "type": "text", "body": "..." }
+  2. BUTTONS: { "type": "button", "body": "...", "options": ["..."] }
+  Context: Use the conversation history provided.
   `;
+
+  // HELPER: Talk to Supabase via REST API (No Library Needed!)
+  async function supabaseRequest(endpoint, method, body = null) {
+    const url = `${process.env.SUPABASE_URL}/rest/v1/${endpoint}`;
+    const headers = {
+      'apikey': process.env.SUPABASE_KEY,
+      'Authorization': `Bearer ${process.env.SUPABASE_KEY}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=minimal'
+    };
+    
+    const options = { method, headers };
+    if (body) options.body = JSON.stringify(body);
+    
+    const response = await fetch(url, options);
+    return response.ok ? response.json() : null;
+  }
 
   // 1. Verify Webhook (GET)
   if (req.method === 'GET') {
@@ -34,7 +41,6 @@ export default async function handler(req, res) {
   // 2. Handle Messages (POST)
   if (req.method === 'POST') {
     const body = req.body;
-
     if (body.object && body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages) {
       const message = body.entry[0].changes[0].value.messages[0];
       const senderPhone = message.from;
@@ -46,30 +52,22 @@ export default async function handler(req, res) {
 
       if (userInput) {
         try {
-          // --- STEP A: RETRIEVE MEMORY ---
           console.log("🔍 Fetching history for:", senderPhone);
-          
-          const { data: historyData, error: dbError } = await supabase
-            .from('messages')
-            .select('role, content')
-            .eq('user_phone', senderPhone)
-            .order('id', { ascending: false })
-            .limit(10);
 
-          if (dbError) console.error("Database Error:", dbError);
+          // --- STEP A: READ MEMORY (via Fetch) ---
+          // URL: /messages?user_phone=eq.PHONE&order=id.desc&limit=10
+          const historyUrl = `messages?user_phone=eq.${senderPhone}&order=id.desc&limit=10&select=role,content`;
+          const historyData = await supabaseRequest(historyUrl, 'GET') || [];
 
-          // Map history (Handle if history is empty/null)
-          const chatHistory = (historyData || []).reverse().map(msg => ({
+          const chatHistory = historyData.reverse().map(msg => ({
             role: msg.role === 'assistant' ? 'model' : 'user',
             parts: [{ text: msg.content }]
           }));
 
-          const currentTurn = { role: "user", parts: [{ text: userInput }] };
-          const fullConversation = [...chatHistory, currentTurn];
+          const fullConversation = [...chatHistory, { role: "user", parts: [{ text: userInput }] }];
 
           // --- STEP B: ASK GEMINI ---
           const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
-          
           const geminiResponse = await fetch(geminiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -85,13 +83,13 @@ export default async function handler(req, res) {
           aiRawText = aiRawText.replace(/```json|```/g, "").trim();
           const aiInstruction = JSON.parse(aiRawText);
 
-          // --- STEP C: SAVE MEMORY ---
-          // Save User Msg
-          await supabase.from('messages').insert({ user_phone: senderPhone, role: 'user', content: userInput });
+          // --- STEP C: WRITE MEMORY (via Fetch) ---
+          // 1. Save User Message
+          await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'user', content: userInput });
           
-          // Save AI Msg
+          // 2. Save AI Reply
           if (aiInstruction.body) {
-             await supabase.from('messages').insert({ user_phone: senderPhone, role: 'assistant', content: aiInstruction.body });
+             await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'assistant', content: aiInstruction.body });
           }
 
           // --- STEP D: REPLY TO WHATSAPP ---
@@ -115,6 +113,5 @@ export default async function handler(req, res) {
     }
     return res.status(200).json({ status: "ok" });
   }
-
   return res.status(405).json({ error: 'Method Not Allowed' });
 }
