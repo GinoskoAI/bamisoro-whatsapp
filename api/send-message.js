@@ -1,13 +1,22 @@
 // api/send-message.js
-// VERSION: Debug Mode (Returns exact Meta error)
+// VERSION: Hardened Body Parsing + Template Support
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
-  const { phone, message } = req.body;
+  // DEFENSIVE PARSING
+  let body = req.body;
+  try {
+    if (!body) return res.status(400).json({ error: 'Request body is empty' });
+    if (typeof body === 'string') body = JSON.parse(body);
+  } catch (e) {
+    return res.status(400).json({ error: 'Invalid JSON', details: e.message });
+  }
+
+  const { phone, message } = body;
 
   if (!phone || !message) {
-    return res.status(400).json({ error: 'Missing phone or message' });
+    return res.status(400).json({ error: 'Missing phone or message', received: body });
   }
 
   try {
@@ -22,38 +31,29 @@ export default async function handler(req, res) {
       to: phone,
       type: "template",
       template: {
-        name: "bamisoro_voice_handoff", // <--- CHECK THIS IN META MANAGER
-        language: { code: "en_US" },     // <--- CHECK THIS (Is it en_US, en_GB, or en?)
+        name: "bamisoro_voice_handoff", // Ensure this matches Meta exactly
+        language: { code: "en_US" },
         components: [
           {
             type: "body",
-            parameters: [
-              { 
-                type: "text", 
-                text: message 
-              } 
-            ]
+            parameters: [{ type: "text", text: message }]
           }
         ]
       }
     };
 
     const metaResponse = await fetch(WHATSAPP_URL, { 
-      method: 'POST', 
-      headers: HEADERS, 
-      body: JSON.stringify(payload) 
+      method: 'POST', headers: HEADERS, body: JSON.stringify(payload) 
     });
 
     const metaData = await metaResponse.json();
 
     if (!metaResponse.ok) {
       console.error("Meta Error:", metaData);
-      // RETURN THE ACTUAL ERROR TO ULTRAVOX SO YOU CAN SEE IT
       return res.status(500).json({ error: 'Meta Rejected Request', details: metaData });
     }
 
-    // ... (Logging to Supabase logic remains here) ...
-    // LOG TO SUPABASE
+    // Log to Supabase
     const supabaseUrl = `${process.env.SUPABASE_URL}/rest/v1/messages`;
     const supabaseHeaders = {
       'apikey': process.env.SUPABASE_KEY,
@@ -76,6 +76,6 @@ export default async function handler(req, res) {
 
   } catch (error) {
     console.error("API Error:", error);
-    return res.status(500).json({ error: 'Internal Server Error', details: error.message });
+    return res.status(500).json({ error: 'Internal Server Error' });
   }
 }
