@@ -1,7 +1,8 @@
 // api/webhook.js
-import { createClient } from '@supabase/supabase-js';
+// USE REQUIRE INSTEAD OF IMPORT (Safer for Vercel)
+const { createClient } = require('@supabase/supabase-js');
 
-// Initialize the Database Connection
+// Initialize the Database
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 export default async function handler(req, res) {
@@ -19,7 +20,7 @@ export default async function handler(req, res) {
   2. FOR BUTTON CHOICES:
      Reply: { "type": "button", "body": "Choose:", "options": ["A", "B"] }
 
-  Context: You have access to the user's past conversation history. Use it to be personal and helpful.
+  Context: You have access to the user's past conversation history.
   `;
 
   // 1. Verify Webhook (GET)
@@ -38,7 +39,6 @@ export default async function handler(req, res) {
       const message = body.entry[0].changes[0].value.messages[0];
       const senderPhone = message.from;
       
-      // Get User Input
       let userInput = "";
       if (message.type === "text") userInput = message.text.body;
       else if (message.type === "audio") userInput = "[User sent a voice note]"; 
@@ -46,34 +46,35 @@ export default async function handler(req, res) {
 
       if (userInput) {
         try {
-          // --- STEP A: RETRIEVE MEMORY FROM SUPABASE ---
-          // Fetch last 10 messages for this phone number
-          const { data: historyData, error } = await supabase
+          // --- STEP A: RETRIEVE MEMORY ---
+          console.log("🔍 Fetching history for:", senderPhone);
+          
+          const { data: historyData, error: dbError } = await supabase
             .from('messages')
             .select('role, content')
             .eq('user_phone', senderPhone)
             .order('id', { ascending: false })
             .limit(10);
 
-          // Format history for Gemini (Oldest first)
-          // Map 'assistant' role to 'model' for Gemini API
+          if (dbError) console.error("Database Error:", dbError);
+
+          // Map history (Handle if history is empty/null)
           const chatHistory = (historyData || []).reverse().map(msg => ({
             role: msg.role === 'assistant' ? 'model' : 'user',
             parts: [{ text: msg.content }]
           }));
 
-          // Add the NEW message to the conversation
           const currentTurn = { role: "user", parts: [{ text: userInput }] };
           const fullConversation = [...chatHistory, currentTurn];
 
-          // --- STEP B: ASK GEMINI (With History) ---
+          // --- STEP B: ASK GEMINI ---
           const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
           
           const geminiResponse = await fetch(geminiUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              contents: fullConversation, // Send the whole history!
+              contents: fullConversation,
               system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
               generationConfig: { responseMimeType: "application/json" }
             })
@@ -84,16 +85,16 @@ export default async function handler(req, res) {
           aiRawText = aiRawText.replace(/```json|```/g, "").trim();
           const aiInstruction = JSON.parse(aiRawText);
 
-          // --- STEP C: SAVE TO DATABASE (Write Memory) ---
-          // 1. Save User Message
+          // --- STEP C: SAVE MEMORY ---
+          // Save User Msg
           await supabase.from('messages').insert({ user_phone: senderPhone, role: 'user', content: userInput });
           
-          // 2. Save AI Reply (The body text)
+          // Save AI Msg
           if (aiInstruction.body) {
              await supabase.from('messages').insert({ user_phone: senderPhone, role: 'assistant', content: aiInstruction.body });
           }
 
-          // --- STEP D: SEND TO WHATSAPP ---
+          // --- STEP D: REPLY TO WHATSAPP ---
           const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
           const HEADERS = { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' };
           let payload = {};
@@ -107,7 +108,9 @@ export default async function handler(req, res) {
 
           if (payload.messaging_product) await fetch(WHATSAPP_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
 
-        } catch (error) { console.error("Agent Error:", error); }
+        } catch (error) { 
+          console.error("CRITICAL ERROR:", error); 
+        }
       }
     }
     return res.status(200).json({ status: "ok" });
