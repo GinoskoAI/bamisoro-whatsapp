@@ -1,39 +1,35 @@
 // api/save-call.js
-// VERSION: Deep Logging & Debugging
+// VERSION: Universal Parser (Checks Body AND Query)
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
-
-  // 1. LOG RAW INPUT (Crucial for debugging)
-  console.log("📥 Raw Body Type:", typeof req.body);
-  console.log("📥 Raw Body Content:", JSON.stringify(req.body));
-
-  let body = req.body;
-
-  // 2. Defensive Parsing
-  try {
-    if (!body) return res.status(400).json({ error: 'Request body is empty' });
-    if (typeof body === 'string') {
-        console.log("⚠️ Body is string, parsing manually...");
-        body = JSON.parse(body);
-    }
-  } catch (e) {
-    console.error("❌ JSON Parse Error:", e.message);
-    return res.status(400).json({ error: 'Invalid JSON body', details: e.message });
+  // 1. Allow POST (and GET for easier browser testing/debugging)
+  if (req.method !== 'POST' && req.method !== 'GET') {
+    return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  // 3. Extract & Validate
-  const { phone, summary, new_facts } = body;
+  // 2. UNIVERSAL PARSER: Check Body first, then Query
+  let data = req.body;
+  
+  // If body is undefined or empty string, try parsing or fallback to query
+  if (!data || (typeof data === 'object' && Object.keys(data).length === 0)) {
+    if (typeof req.body === 'string' && req.body.length > 0) {
+      try { data = JSON.parse(req.body); } catch(e) {}
+    }
+  }
+  
+  // MERGE: Combine Query and Body (Query takes priority if Body fails)
+  // This fixes the issue if Ultravox sends params in the URL
+  const payload = { ...data, ...req.query };
 
-  // Debug Log
-  console.log("🔍 Extracted Data -> Phone:", phone, "| Summary:", summary ? "Yes" : "No");
+  console.log("📥 Received Data:", JSON.stringify(payload));
+
+  const { phone, summary, new_facts } = payload;
 
   if (!phone || !summary) {
-    console.error("❌ Validation Failed. Missing phone or summary.");
     return res.status(400).json({ 
-        error: 'Missing required fields', 
-        required: ['phone', 'summary'], 
-        received: Object.keys(body) 
+      error: 'Missing required fields', 
+      details: 'We need "phone" and "summary".',
+      received: payload 
     });
   }
 
@@ -41,8 +37,8 @@ export default async function handler(req, res) {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_KEY;
 
-    // Helper
-    async function supabase(endpoint, method, payload) {
+    // Helper Function
+    async function supabase(endpoint, method, body) {
       return fetch(`${supabaseUrl}/rest/v1/${endpoint}`, {
         method,
         headers: {
@@ -51,18 +47,18 @@ export default async function handler(req, res) {
           'Content-Type': 'application/json',
           'Prefer': 'return=minimal'
         },
-        body: JSON.stringify(payload)
+        body: JSON.stringify(body)
       });
     }
 
-    // 4. Save to Messages
+    // 3. Save to Messages
     await supabase('messages', 'POST', {
       user_phone: phone,
       role: 'assistant',
       content: `[VOICE CALL SUMMARY]: ${summary}`
     });
 
-    // 5. Save to Profile
+    // 4. Save to Profile
     if (new_facts) {
       const getProfile = await fetch(`${supabaseUrl}/rest/v1/user_profiles?phone=eq.${phone}&select=summary`, {
          headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
@@ -82,11 +78,10 @@ export default async function handler(req, res) {
       });
     }
 
-    console.log("✅ Memory Saved Successfully");
     return res.status(200).json({ status: 'Memory Updated' });
 
   } catch (error) {
-    console.error("❌ Internal API Error:", error);
-    return res.status(500).json({ error: 'Internal Server Error', msg: error.message });
+    console.error("API Error:", error);
+    return res.status(500).json({ error: 'Internal Server Error', details: error.message });
   }
 }
