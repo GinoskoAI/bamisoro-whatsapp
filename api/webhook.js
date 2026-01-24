@@ -1,63 +1,63 @@
 // api/webhook.js
-// VERSION: Bulletproof JSON Handling
+// VERSION: Deep Memory & Metadata Tracker
 
 export default async function handler(req, res) {
-  // ============================================================
-  // 1. HELPER: Talk to Supabase (Now Crash-Proof!)
-  // ============================================================
+  // 1. HELPER: Talk to Supabase
   async function supabaseRequest(endpoint, method, body = null) {
     const url = `${process.env.SUPABASE_URL}/rest/v1/${endpoint}`;
     const headers = {
       'apikey': process.env.SUPABASE_KEY,
       'Authorization': `Bearer ${process.env.SUPABASE_KEY}`,
       'Content-Type': 'application/json',
-      'Prefer': 'return=minimal' // Tells Supabase: "Don't send back the whole object, just save it."
+      'Prefer': 'return=minimal'
     };
+    if (method === 'GET') headers['Prefer'] = 'return=representation';
     
     const options = { method, headers };
     if (body) options.body = JSON.stringify(body);
-    
     try {
       const response = await fetch(url, options);
-      
-      // FIX: If the response is empty (204 No Content), stop here.
       if (response.status === 204) return null;
-
       const text = await response.text();
-      // Only try to parse if there is actually text
       return text ? JSON.parse(text) : null;
-
-    } catch (err) {
-      console.error(`Supabase Error (${endpoint}):`, err);
-      return null;
-    }
+    } catch (err) { return null; }
   }
 
-  // ============================================================
-  // 2. CONFIGURATION: System Prompt
-  // ============================================================
+  // 2. CONFIGURATION: The "Sherlock" Brain
   const SYSTEM_PROMPT = `
-  You are Bamisoro, a smart AI assistant for Nigerian businesses.
-  CRITICAL: Reply in strict JSON format.
-  1. TEXT: { "type": "text", "body": "..." }
-  2. BUTTONS: { "type": "button", "body": "...", "options": ["..."] }
-  Context: Use the conversation history provided.
+  You are Bamisoro.
+  
+  CRITICAL: Reply in JSON format with TWO parts:
+  1. "response": The reply to the user.
+  2. "memory_update": A specialized summary of NEW facts learned in this turn.
+  
+  JSON STRUCTURE:
+  {
+    "response": { "type": "text", "body": "..." },
+    "memory_update": "User mentioned they own a bakery. User is looking for gluten-free options." (OR null if nothing new)
+  }
+
+  MEMORY RULES:
+  - You will be provided with a "USER SUMMARY" (Past facts).
+  - If the user mentions a NEW fact (hobbies, job, family, preferences), add it to "memory_update".
+  - Do NOT repeat facts already in the "USER SUMMARY".
   `;
 
-  // 3. Verify Webhook (GET)
   if (req.method === 'GET') {
-    if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === process.env.WEBHOOK_VERIFY_TOKEN) {
-      return res.status(200).send(req.query['hub.challenge']);
-    }
-    return res.status(403).json({ error: 'Verification failed.' });
+     if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === process.env.WEBHOOK_VERIFY_TOKEN) return res.status(200).send(req.query['hub.challenge']);
+     return res.status(403).json({ error: 'Verification failed.' });
   }
 
-  // 4. Handle Messages (POST)
   if (req.method === 'POST') {
     const body = req.body;
     if (body.object && body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages) {
-      const message = body.entry[0].changes[0].value.messages[0];
+      const change = body.entry[0].changes[0].value;
+      const message = change.messages[0];
       const senderPhone = message.from;
+      
+      // --- CAPTURE METADATA ---
+      // WhatsApp often sends the user's profile name in the "contacts" object
+      const whatsappName = change.contacts?.[0]?.profile?.name || "Unknown";
       
       let userInput = "";
       if (message.type === "text") userInput = message.text.body;
@@ -66,22 +66,49 @@ export default async function handler(req, res) {
 
       if (userInput) {
         try {
-          console.log("🔍 processing for:", senderPhone);
+          // A. GET PROFILE (Facts + Summary)
+          const profileUrl = `user_profiles?phone=eq.${senderPhone}&select=*`;
+          const profileData = await supabaseRequest(profileUrl, 'GET');
+          let currentProfile = profileData && profileData.length > 0 ? profileData[0] : {};
 
-          // A. READ MEMORY (Safe Fetch)
-          // We ask for role and content. We handle if the result is null.
-          const historyUrl = `messages?user_phone=eq.${senderPhone}&order=id.desc&limit=10&select=role,content`;
+          // If new user, create basic profile immediately using WhatsApp Name
+          if (!currentProfile.phone) {
+            console.log("👤 New User detected:", whatsappName);
+            await supabaseRequest('user_profiles', 'POST', { 
+              phone: senderPhone, 
+              name: whatsappName, // Use the name from WhatsApp!
+              last_updated: new Date().toISOString()
+            });
+            currentProfile = { name: whatsappName, summary: "" };
+          } else {
+            // Update "Last Seen" timestamp
+            await supabaseRequest(`user_profiles?phone=eq.${senderPhone}`, 'PATCH', { 
+              last_updated: new Date().toISOString() 
+            });
+          }
+
+          // B. GET RECENT CHAT (Context)
+          const historyUrl = `messages?user_phone=eq.${senderPhone}&order=id.desc&limit=15&select=role,content`;
           const historyData = await supabaseRequest(historyUrl, 'GET') || [];
-
-          // Format history safely
           const chatHistory = historyData.reverse().map(msg => ({
             role: msg.role === 'assistant' ? 'model' : 'user',
             parts: [{ text: msg.content }]
           }));
 
-          const fullConversation = [...chatHistory, { role: "user", parts: [{ text: userInput }] }];
+          // C. PREPARE PROMPT (Injecting the "Summary")
+          const contextString = `
+            USER DOSSIER (KNOWN FACTS):
+            - Name: ${currentProfile.name}
+            - Phone: ${senderPhone}
+            - Last Seen: ${new Date().toISOString()}
+            - KNOWN FACTS: ${currentProfile.summary || "No details yet."}
+            
+            USER INPUT: "${userInput}"
+          `;
 
-          // B. ASK GEMINI
+          const fullConversation = [...chatHistory, { role: "user", parts: [{ text: contextString }] }];
+
+          // D. ASK GEMINI
           const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
           const geminiResponse = await fetch(geminiUrl, {
             method: 'POST',
@@ -93,48 +120,49 @@ export default async function handler(req, res) {
             })
           });
 
-          // Handle Gemini Errors Safely
-          if (!geminiResponse.ok) {
-            const errText = await geminiResponse.text();
-            throw new Error(`Gemini API Error: ${errText}`);
-          }
-
+          // E. PROCESS RESPONSE
           const geminiData = await geminiResponse.json();
           let aiRawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-          aiRawText = aiRawText.replace(/```json|```/g, "").trim();
-          
-          let aiInstruction;
-          try {
-             aiInstruction = JSON.parse(aiRawText);
-          } catch (e) {
-             console.error("AI returned bad JSON:", aiRawText);
-             aiInstruction = { type: "text", body: "I am having trouble thinking right now." };
+          let aiOutput;
+          try { aiOutput = JSON.parse(aiRawText.replace(/```json|```/g, "").trim()); } 
+          catch (e) { aiOutput = { response: { type: "text", body: "Thinking..." } }; }
+
+          // F. UPDATE MEMORY (The "Summary" Append)
+          if (aiOutput.memory_update) {
+            console.log("🧠 New Fact Learned:", aiOutput.memory_update);
+            
+            // We append the new fact to the existing summary
+            const oldSummary = currentProfile.summary || "";
+            const newSummary = oldSummary + "\n- " + aiOutput.memory_update;
+            
+            // Limit summary size (keep last 2000 chars to avoid overflow if needed)
+            const finalSummary = newSummary.slice(-2000); 
+
+            await supabaseRequest(`user_profiles?phone=eq.${senderPhone}`, 'PATCH', { 
+              summary: finalSummary
+            });
           }
 
-          // C. WRITE MEMORY (Safe Save)
+          // G. SAVE CHAT & REPLY
+          const aiReply = aiOutput.response || { type: "text", body: "..." };
+          
           await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'user', content: userInput });
-          
-          if (aiInstruction.body) {
-             await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'assistant', content: aiInstruction.body });
-          }
+          if (aiReply.body) await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'assistant', content: aiReply.body });
 
-          // D. REPLY TO WHATSAPP
           const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
           const HEADERS = { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' };
           let payload = {};
 
-          if (aiInstruction.type === "text") {
-            payload = { messaging_product: "whatsapp", to: senderPhone, text: { body: aiInstruction.body } };
-          } else if (aiInstruction.type === "button") {
-             const buttons = aiInstruction.options.map((opt, i) => ({ type: "reply", reply: { id: `btn_${i}`, title: opt.substring(0, 20) } }));
-             payload = { messaging_product: "whatsapp", to: senderPhone, type: "interactive", interactive: { type: "button", body: { text: aiInstruction.body }, action: { buttons: buttons } } };
+          if (aiReply.type === "text") {
+            payload = { messaging_product: "whatsapp", to: senderPhone, text: { body: aiReply.body } };
+          } else if (aiReply.type === "button") {
+             const buttons = aiReply.options.map((opt, i) => ({ type: "reply", reply: { id: `btn_${i}`, title: opt.substring(0, 20) } }));
+             payload = { messaging_product: "whatsapp", to: senderPhone, type: "interactive", interactive: { type: "button", body: { text: aiReply.body }, action: { buttons: buttons } } };
           }
 
           if (payload.messaging_product) await fetch(WHATSAPP_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
 
-        } catch (error) { 
-          console.error("CRITICAL ERROR:", error); 
-        }
+        } catch (error) { console.error("CRITICAL ERROR:", error); }
       }
     }
     return res.status(200).json({ status: "ok" });
