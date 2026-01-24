@@ -1,21 +1,43 @@
 // api/save-call.js
-// This tool allows the Voice Agent to "save" memories into the Chatbot's brain.
+// VERSION: Hardened Body Parsing (Fixes "undefined" error)
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+  // 1. Allow POST only
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
 
-  const { phone, summary, new_facts } = req.body;
+  // 2. DEFENSIVE PARSING (The Fix)
+  // Sometimes req.body is a string, sometimes undefined, sometimes an object.
+  let body = req.body;
+
+  try {
+    // If body is missing, check if it's strictly undefined
+    if (!body) {
+      return res.status(400).json({ error: 'Request body is empty' });
+    }
+    // If Vercel passed it as a string (raw), parse it manually
+    if (typeof body === 'string') {
+      body = JSON.parse(body);
+    }
+  } catch (e) {
+    return res.status(400).json({ error: 'Invalid JSON body', details: e.message });
+  }
+
+  // 3. Destructure from the SAFE body object
+  const { phone, summary, new_facts } = body;
 
   if (!phone || !summary) {
-    return res.status(400).json({ error: 'Missing phone or summary' });
+    console.error("Missing Data:", body); // Log what we actually got
+    return res.status(400).json({ error: 'Missing phone or summary fields', received: body });
   }
 
   try {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_KEY;
 
-    // HELPER: Simple Fetch Wrapper for Supabase
-    async function supabase(endpoint, method, body) {
+    // HELPER: Simple Fetch Wrapper
+    async function supabase(endpoint, method, payload) {
       return fetch(`${supabaseUrl}/rest/v1/${endpoint}`, {
         method,
         headers: {
@@ -24,22 +46,19 @@ export default async function handler(req, res) {
           'Content-Type': 'application/json',
           'Prefer': 'return=minimal'
         },
-        body: JSON.stringify(body)
+        body: JSON.stringify(payload)
       });
     }
 
-    // 1. LOG TO MESSAGE HISTORY (Short-Term Memory)
-    // This inserts a "fake" message so the Chatbot sees it as the last thing that happened.
+    // 4. LOG TO MESSAGE HISTORY (Short-Term Memory)
     await supabase('messages', 'POST', {
       user_phone: phone,
-      role: 'assistant', // Log it as the AI speaking (or 'system' if you prefer)
+      role: 'assistant',
       content: `[VOICE CALL SUMMARY]: ${summary}`
     });
 
-    // 2. UPDATE USER PROFILE (Long-Term Memory)
-    // If the Voice Agent learned new facts (e.g. "User is a Baker"), we append it.
+    // 5. UPDATE USER PROFILE (Long-Term Memory)
     if (new_facts) {
-      // First, get the existing profile to avoid overwriting
       const getProfile = await fetch(`${supabaseUrl}/rest/v1/user_profiles?phone=eq.${phone}&select=summary`, {
          headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
       });
@@ -47,13 +66,11 @@ export default async function handler(req, res) {
       let existingSummary = "";
       if (getProfile.ok) {
         const data = await getProfile.json();
-        if (data.length > 0) existingSummary = data[0].summary || "";
+        if (data && data.length > 0) existingSummary = data[0].summary || "";
       }
 
-      // Append new facts
       const updatedSummary = (existingSummary + "\n- " + new_facts).slice(-3000);
 
-      // Save back to DB
       await supabase(`user_profiles?phone=eq.${phone}`, 'PATCH', {
         summary: updatedSummary,
         last_updated: new Date().toISOString()
