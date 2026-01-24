@@ -1,25 +1,43 @@
 // api/webhook.js
-// --- NO IMPORTS, NO REQUIRES. PURE JAVASCRIPT. ---
+// VERSION: Bulletproof JSON Handling
 
 export default async function handler(req, res) {
-  // 1. HELPER: Talk to Supabase via standard Fetch (No library needed)
+  // ============================================================
+  // 1. HELPER: Talk to Supabase (Now Crash-Proof!)
+  // ============================================================
   async function supabaseRequest(endpoint, method, body = null) {
     const url = `${process.env.SUPABASE_URL}/rest/v1/${endpoint}`;
     const headers = {
       'apikey': process.env.SUPABASE_KEY,
       'Authorization': `Bearer ${process.env.SUPABASE_KEY}`,
       'Content-Type': 'application/json',
-      'Prefer': 'return=minimal'
+      'Prefer': 'return=minimal' // Tells Supabase: "Don't send back the whole object, just save it."
     };
+    
     const options = { method, headers };
     if (body) options.body = JSON.stringify(body);
-    const response = await fetch(url, options);
-    return response.ok ? response.json() : null;
+    
+    try {
+      const response = await fetch(url, options);
+      
+      // FIX: If the response is empty (204 No Content), stop here.
+      if (response.status === 204) return null;
+
+      const text = await response.text();
+      // Only try to parse if there is actually text
+      return text ? JSON.parse(text) : null;
+
+    } catch (err) {
+      console.error(`Supabase Error (${endpoint}):`, err);
+      return null;
+    }
   }
 
+  // ============================================================
   // 2. CONFIGURATION: System Prompt
+  // ============================================================
   const SYSTEM_PROMPT = `
-  You are Bamisoro.
+  You are Bamisoro, a smart AI assistant for Nigerian businesses.
   CRITICAL: Reply in strict JSON format.
   1. TEXT: { "type": "text", "body": "..." }
   2. BUTTONS: { "type": "button", "body": "...", "options": ["..."] }
@@ -50,10 +68,12 @@ export default async function handler(req, res) {
         try {
           console.log("🔍 processing for:", senderPhone);
 
-          // A. READ MEMORY
+          // A. READ MEMORY (Safe Fetch)
+          // We ask for role and content. We handle if the result is null.
           const historyUrl = `messages?user_phone=eq.${senderPhone}&order=id.desc&limit=10&select=role,content`;
           const historyData = await supabaseRequest(historyUrl, 'GET') || [];
 
+          // Format history safely
           const chatHistory = historyData.reverse().map(msg => ({
             role: msg.role === 'assistant' ? 'model' : 'user',
             parts: [{ text: msg.content }]
@@ -73,13 +93,27 @@ export default async function handler(req, res) {
             })
           });
 
+          // Handle Gemini Errors Safely
+          if (!geminiResponse.ok) {
+            const errText = await geminiResponse.text();
+            throw new Error(`Gemini API Error: ${errText}`);
+          }
+
           const geminiData = await geminiResponse.json();
           let aiRawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
           aiRawText = aiRawText.replace(/```json|```/g, "").trim();
-          const aiInstruction = JSON.parse(aiRawText);
+          
+          let aiInstruction;
+          try {
+             aiInstruction = JSON.parse(aiRawText);
+          } catch (e) {
+             console.error("AI returned bad JSON:", aiRawText);
+             aiInstruction = { type: "text", body: "I am having trouble thinking right now." };
+          }
 
-          // C. WRITE MEMORY
+          // C. WRITE MEMORY (Safe Save)
           await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'user', content: userInput });
+          
           if (aiInstruction.body) {
              await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'assistant', content: aiInstruction.body });
           }
