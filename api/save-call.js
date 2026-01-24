@@ -1,42 +1,47 @@
 // api/save-call.js
-// VERSION: Hardened Body Parsing (Fixes "undefined" error)
+// VERSION: Deep Logging & Debugging
 
 export default async function handler(req, res) {
-  // 1. Allow POST only
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
-  }
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
-  // 2. DEFENSIVE PARSING (The Fix)
-  // Sometimes req.body is a string, sometimes undefined, sometimes an object.
+  // 1. LOG RAW INPUT (Crucial for debugging)
+  console.log("📥 Raw Body Type:", typeof req.body);
+  console.log("📥 Raw Body Content:", JSON.stringify(req.body));
+
   let body = req.body;
 
+  // 2. Defensive Parsing
   try {
-    // If body is missing, check if it's strictly undefined
-    if (!body) {
-      return res.status(400).json({ error: 'Request body is empty' });
-    }
-    // If Vercel passed it as a string (raw), parse it manually
+    if (!body) return res.status(400).json({ error: 'Request body is empty' });
     if (typeof body === 'string') {
-      body = JSON.parse(body);
+        console.log("⚠️ Body is string, parsing manually...");
+        body = JSON.parse(body);
     }
   } catch (e) {
+    console.error("❌ JSON Parse Error:", e.message);
     return res.status(400).json({ error: 'Invalid JSON body', details: e.message });
   }
 
-  // 3. Destructure from the SAFE body object
+  // 3. Extract & Validate
   const { phone, summary, new_facts } = body;
 
+  // Debug Log
+  console.log("🔍 Extracted Data -> Phone:", phone, "| Summary:", summary ? "Yes" : "No");
+
   if (!phone || !summary) {
-    console.error("Missing Data:", body); // Log what we actually got
-    return res.status(400).json({ error: 'Missing phone or summary fields', received: body });
+    console.error("❌ Validation Failed. Missing phone or summary.");
+    return res.status(400).json({ 
+        error: 'Missing required fields', 
+        required: ['phone', 'summary'], 
+        received: Object.keys(body) 
+    });
   }
 
   try {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_KEY;
 
-    // HELPER: Simple Fetch Wrapper
+    // Helper
     async function supabase(endpoint, method, payload) {
       return fetch(`${supabaseUrl}/rest/v1/${endpoint}`, {
         method,
@@ -50,14 +55,14 @@ export default async function handler(req, res) {
       });
     }
 
-    // 4. LOG TO MESSAGE HISTORY (Short-Term Memory)
+    // 4. Save to Messages
     await supabase('messages', 'POST', {
       user_phone: phone,
       role: 'assistant',
       content: `[VOICE CALL SUMMARY]: ${summary}`
     });
 
-    // 5. UPDATE USER PROFILE (Long-Term Memory)
+    // 5. Save to Profile
     if (new_facts) {
       const getProfile = await fetch(`${supabaseUrl}/rest/v1/user_profiles?phone=eq.${phone}&select=summary`, {
          headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
@@ -77,10 +82,11 @@ export default async function handler(req, res) {
       });
     }
 
+    console.log("✅ Memory Saved Successfully");
     return res.status(200).json({ status: 'Memory Updated' });
 
   } catch (error) {
-    console.error("API Error:", error);
-    return res.status(500).json({ error: 'Internal Server Error' });
+    console.error("❌ Internal API Error:", error);
+    return res.status(500).json({ error: 'Internal Server Error', msg: error.message });
   }
 }
