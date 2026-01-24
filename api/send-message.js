@@ -1,5 +1,5 @@
 // api/send-message.js
-// VERSION: Hardened Body Parsing + Template Support
+// VERSION: Language Fix (en) & Debugging
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
@@ -15,8 +15,12 @@ export default async function handler(req, res) {
 
   const { phone, message } = body;
 
+  // Log what we received to Vercel Logs
+  console.log("👉 Sending WhatsApp to:", phone);
+  console.log("👉 Content:", message);
+
   if (!phone || !message) {
-    return res.status(400).json({ error: 'Missing phone or message', received: body });
+    return res.status(400).json({ error: 'Missing phone or message' });
   }
 
   try {
@@ -31,8 +35,8 @@ export default async function handler(req, res) {
       to: phone,
       type: "template",
       template: {
-        name: "bamisoro_voice_handoff", // Ensure this matches Meta exactly
-        language: { code: "en_US" },
+        name: "bamisoro_voice_handoff", 
+        language: { code: "en" }, // <--- CHANGED FROM "en_US" TO "en" (Standard English)
         components: [
           {
             type: "body",
@@ -49,11 +53,15 @@ export default async function handler(req, res) {
     const metaData = await metaResponse.json();
 
     if (!metaResponse.ok) {
-      console.error("Meta Error:", metaData);
+      console.error("❌ Meta API Error:", JSON.stringify(metaData, null, 2));
+      // Fallback: If "en" fails, try "en_US" automatically
+      if (metaData.error && metaData.error.message.includes("does not exist")) {
+         return res.status(500).json({ error: 'Template Language Mismatch. Check if template is "en" or "en_US" in Meta.', meta_error: metaData });
+      }
       return res.status(500).json({ error: 'Meta Rejected Request', details: metaData });
     }
 
-    // Log to Supabase
+    // Success! Log to Supabase
     const supabaseUrl = `${process.env.SUPABASE_URL}/rest/v1/messages`;
     const supabaseHeaders = {
       'apikey': process.env.SUPABASE_KEY,
@@ -75,7 +83,7 @@ export default async function handler(req, res) {
     return res.status(200).json({ status: 'Handoff complete' });
 
   } catch (error) {
-    console.error("API Error:", error);
+    console.error("Critical API Error:", error);
     return res.status(500).json({ error: 'Internal Server Error' });
   }
 }
