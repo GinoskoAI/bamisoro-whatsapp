@@ -120,4 +120,31 @@ export default async function handler(req, res) {
               headers: WP_HEADERS, 
               body: JSON.stringify({ 
                   messaging_product: "whatsapp", 
-                  to:
+                  to: senderPhone, 
+                  text: { body: aiReply.body } 
+              }) 
+          });
+
+        } catch (error) {
+          // ERROR REPORTER
+          const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
+          const WP_HEADERS = { 
+            'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 
+            'Content-Type': 'application/json' 
+          };
+          await fetch(WHATSAPP_URL, {
+              method: 'POST', 
+              headers: WP_HEADERS, 
+              body: JSON.stringify({ 
+                  messaging_product: "whatsapp", 
+                  to: senderPhone, 
+                  text: { body: `⚠️ DEBUG ERROR: ${error.message}` } 
+              }) 
+          });
+        }
+      }
+    }
+    return res.status(200).json({ status: "ok" });
+  }
+  return res.status(405).json({ error: 'Method Not Allowed' });
+}
