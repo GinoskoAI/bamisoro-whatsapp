@@ -1,10 +1,10 @@
 // api/send-message.js
-// VERSION: Smart Retry (Auto-detects Language: en_US, en, or en_GB)
+// VERSION: Utility Optimized + Smart Retry
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
-  // 1. UNIVERSAL PARSER
+  // 1. UNIVERSAL PARSER (Catch Body or Query data)
   let data = req.body;
   if (!data || (typeof data === 'object' && Object.keys(data).length === 0)) {
     if (typeof req.body === 'string') try { data = JSON.parse(req.body); } catch(e) {}
@@ -12,17 +12,13 @@ export default async function handler(req, res) {
   const payloadData = { ...data, ...req.query };
   const { phone, message } = payloadData;
 
-  console.log(`👉 Smart Retry sending to: ${phone}`);
-
   if (!phone || !message) {
     return res.status(400).json({ error: 'Missing phone or message', received: payloadData });
   }
 
-  // ⚠️ CRITICAL: PUT YOUR EXACT TEMPLATE NAME HERE
-  // Check WhatsApp Manager. Is it "call_follow_up"? Or "bamisoro_voice_handoff"?
-  const TEMPLATE_NAME = "call_follow_up"; 
-
-  const LANGUAGES_TO_TRY = ["en_US", "en", "en_GB"];
+  // ⚠️ ACTION: Ensure you have a UTILITY template named "call_follow_up_utility"
+  const TEMPLATE_NAME = "call_follow_up_utility"; 
+  const LANGUAGES_TO_TRY = ["en", "en_US", "en_GB"];
   let lastError = null;
 
   try {
@@ -32,9 +28,9 @@ export default async function handler(req, res) {
       'Content-Type': 'application/json' 
     };
 
-    // LOOP THROUGH LANGUAGES
+    // 2. SMART RETRY LOOP
     for (const langCode of LANGUAGES_TO_TRY) {
-      console.log(`🔄 Trying language: ${langCode}...`);
+      console.log(`🔄 Attempting ${TEMPLATE_NAME} in ${langCode}...`);
 
       const metaPayload = {
         messaging_product: "whatsapp",
@@ -46,7 +42,12 @@ export default async function handler(req, res) {
           components: [
             {
               type: "body",
-              parameters: [{ type: "text", text: message }]
+              parameters: [
+                { 
+                  type: "text", 
+                  text: message // This maps to your {{call_summary}} variable
+                }
+              ]
             }
           ]
         }
@@ -59,15 +60,14 @@ export default async function handler(req, res) {
       const metaData = await response.json();
 
       if (response.ok) {
-        console.log(`✅ SUCCESS! Template found in language: ${langCode}`);
+        console.log(`✅ SUCCESS: Sent via ${langCode}`);
         
-        // Log to Supabase and exit
+        // 3. LOG TO SUPABASE
         const supabaseUrl = `${process.env.SUPABASE_URL}/rest/v1/messages`;
         const supabaseHeaders = {
           'apikey': process.env.SUPABASE_KEY,
           'Authorization': `Bearer ${process.env.SUPABASE_KEY}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=minimal'
+          'Content-Type': 'application/json'
         };
 
         await fetch(supabaseUrl, {
@@ -75,29 +75,25 @@ export default async function handler(req, res) {
           body: JSON.stringify({
             user_phone: phone,
             role: 'assistant',
-            content: `[Voice Agent Follow-up]: ${message}`
+            content: `[Voice Follow-up Sent]: ${message}`
           })
         });
 
         return res.status(200).json({ status: 'Sent', language: langCode });
       }
 
-      // If error is "Template does not exist", continue loop.
-      // If error is anything else (like #100 Invalid Parameter), STOP loop (because template exists, but data is wrong).
       lastError = metaData;
-      const errorMsg = metaData.error?.message || "";
-      if (!errorMsg.includes("does not exist")) {
-        console.error("❌ Template exists but data is invalid:", JSON.stringify(metaData));
-        break; // Stop trying other languages, the issue is the parameters.
+      // If error is NOT about the template missing, stop trying other languages
+      if (metaData.error && !metaData.error.message.includes("does not exist")) {
+        break;
       }
     }
 
-    // If we get here, all languages failed
-    console.error("❌ All languages failed. Last error:", JSON.stringify(lastError));
-    return res.status(500).json({ error: 'Failed to send template', details: lastError });
+    console.error("❌ Failed all attempts:", JSON.stringify(lastError));
+    return res.status(500).json({ error: 'Meta rejected all attempts', details: lastError });
 
   } catch (error) {
-    console.error("API Error:", error);
+    console.error("Critical System Error:", error);
     return res.status(500).json({ error: 'Internal Server Error' });
   }
 }
