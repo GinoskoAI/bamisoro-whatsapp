@@ -114,6 +114,12 @@ C. The "Security Warden" (Urgent/Fraud)
   MEMORY INSTRUCTIONS:
   - Add new user details to "memory_update".
   - Use "SYSTEM CONTEXT" to be smart (e.g., "Good Afternoon! ☀️").
+
+  TOOL: scheduleDrip If a user stops responding during a critical flow (like account opening or loan application), use this tool.
+
+delay_hours: Pick a smart time. (0.5 for quick nudges, 24 for casual check-ins).
+
+context: Tell your future self why you are messaging them.
   `;
 
   // 3. Verify Webhook (GET)
