@@ -1,5 +1,5 @@
 // api/webhook.js
-// VERSION: FIXED - "Muyi" + Smart Cancel (Drip Interruption)
+// VERSION: FIXED - Robust JSON Parsing (No more "...")
 
 export default async function handler(req, res) {
   // ============================================================
@@ -49,8 +49,13 @@ export default async function handler(req, res) {
      - 📞 **Phone:** +234 708 645 4726
 
   CRITICAL: OUTPUT FORMAT (Strict JSON)
-  1. **TEXT REPLY:** { "response": { "type": "text", "body": "..." }, "memory_update": "..." }
-  2. **BUTTONS:** { "response": { "type": "button", "body": "...", "options": ["Book Demo 📅", "Services 🛠️", "Contact 📞"] }, "memory_update": "..." }
+  You MUST return valid JSON. Do not wrap it in markdown code blocks.
+  
+  Example 1 (Text):
+  { "response": { "type": "text", "body": "Hello! How can I help?" }, "memory_update": "User greeted." }
+
+  Example 2 (Buttons):
+  { "response": { "type": "button", "body": "Choose an option:", "options": ["Book Demo 📅", "Services 🛠️"] }, "memory_update": "Offered menu." }
   `;
 
   // 3. Verify Webhook (GET)
@@ -81,9 +86,7 @@ export default async function handler(req, res) {
 
       if (userInput) {
         try {
-          // --- 🔴 SMART CANCEL FIX 🔴 ---
-          // Cancel any 'pending' drips for this user because they just replied!
-          // We use 'supabaseRequest' (REST), not 'supabase.from' (Client SDK)
+          // --- SMART CANCEL ---
           await supabaseRequest(
             `drip_queue?user_phone=eq.${senderPhone}&status=eq.pending`, 
             'PATCH', 
@@ -125,7 +128,7 @@ export default async function handler(req, res) {
           `;
           const fullConversation = [...chatHistory, { role: "user", parts: [{ text: contextString }] }];
 
-          // D. ASK GEMINI (Updated to 1.5 Flash for stability)
+          // D. ASK GEMINI (1.5 Flash)
           const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
           
           const geminiResponse = await fetch(geminiUrl, {
@@ -134,60 +137,8 @@ export default async function handler(req, res) {
             body: JSON.stringify({
               contents: fullConversation,
               system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-              generationConfig: { responseMimeType: "application/json" }
+              generationConfig: { responseMimeType: "application/json" } // Force JSON mode
             })
           });
 
-          const geminiData = await geminiResponse.json();
-          let aiRawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-          let aiOutput;
-          try { aiOutput = JSON.parse(aiRawText.replace(/```json|```/g, "").trim()); } 
-          catch (e) { aiOutput = { response: { type: "text", body: "I'm having a moment! 😅 Could you repeat that?" } }; }
-
-          // E. UPDATE MEMORY
-          if (aiOutput.memory_update) {
-            const oldSummary = currentProfile.summary || "";
-            const newSummary = (oldSummary + "\n- " + aiOutput.memory_update).slice(-3000); 
-            await supabaseRequest(`user_profiles?phone=eq.${senderPhone}`, 'PATCH', { summary: newSummary });
-          }
-
-          // F. SEND TO WHATSAPP
-          const aiReply = aiOutput.response || { type: "text", body: "..." };
-          const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
-          const HEADERS = { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' };
-          
-          let payload = {};
-
-          if (aiReply.type === "text") {
-            payload = { messaging_product: "whatsapp", to: senderPhone, text: { body: aiReply.body } };
-          } 
-          else if (aiReply.type === "button") {
-             const safeOptions = (aiReply.options || []).slice(0, 3);
-             const buttons = safeOptions.map((opt, i) => ({ 
-               type: "reply", 
-               reply: { id: `btn_${i}`, title: opt.substring(0, 20) } 
-             }));
-             payload = { 
-               messaging_product: "whatsapp", 
-               to: senderPhone, 
-               type: "interactive", 
-               interactive: { type: "button", body: { text: aiReply.body }, action: { buttons: buttons } } 
-             };
-          }
-
-          if (payload.messaging_product) {
-            await fetch(WHATSAPP_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
-            
-            // Log interaction
-            const logContent = aiReply.type === 'text' ? aiReply.body : `[Sent ${aiReply.type}]`;
-            await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'assistant', content: logContent });
-            await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'user', content: userInput });
-          }
-
-        } catch (error) { console.error("CRITICAL ERROR:", error); }
-      }
-    }
-    return res.status(200).json({ status: "ok" });
-  }
-  return res.status(405).json({ error: 'Method Not Allowed' });
-}
+          const geminiData = await
