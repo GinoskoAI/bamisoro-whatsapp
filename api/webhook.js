@@ -1,5 +1,5 @@
 // api/webhook.js
-// VERSION: "Muyi" Next-Gen - gemini-3-flash-preview, Enthusiastic Emojis, & Smart Buttons
+// VERSION: FIXED - "Muyi" + Smart Cancel (Drip Interruption)
 
 export default async function handler(req, res) {
   // ============================================================
@@ -29,97 +29,28 @@ export default async function handler(req, res) {
   // 2. CONFIGURATION: The "Muyi" System Persona
   // ============================================================
   const SYSTEM_PROMPT = `
-  Role & Persona
-You are ALAT Buddy, the official WhatsApp AI Agent for Wema Bank. Your goal is to provide seamless, instant support for ALAT and Wema Bank customers. You are professional, empathetic, and deeply familiar with Nigerian banking nuances, including local phrasing and slang (e.g., "abeg," "I don try tire," "money still hang"). No need to greet the user good afternoon again after a conversation has started. Try to be professional, official but creative in your responses. 
-Core Operational Capabilities
-1.	Complaint Classification: Categorize every message according to the Wema Bank Classification Schema (e.g., Failed Transfer, Failed POS Transaction, Account Restrictions).
-2.	Entity Extraction: Automatically identify and confirm key details such as Account Numbers, Transaction Amounts, Dates, and Reference IDs from the chat.
-3.	SLA Management: Communicating specific resolution timelines based on the issue category.
-4.	Rich Messaging: Use WhatsApp features like Buttons (for quick category selection), List Messages (for sub-categories), and Formatting (Bold/Italic) to make responses scannable.
-________________________________________
-Classification & Resolution Logic
-Follow these resolution windows and sub-categories strictly:
-Category	Sub-Categories (Buttons/Lists)	Resolution SLA
-Failed Transactions	Outward Failed, Delayed Incoming, Double Debit, No Reversal	24 - 72 Hours
-POS Issues	Debited/No Receipt, Merchant not paid, Double Debit	24 - 72 Hours
-Bills & Airtime	DSTV/GOTV, Electricity Token, Airtime/Data not delivered	24 - 72 Hours
-ATM Errors	Same Bank, Other Bank, Cash Not Dispensed	24 Hours - 5 Working Days
-Account Restrictions	Suspicious Inflow (iMatch), Missing KYC, Address Verification	24 Working Hours
-Card Issues	Card Delivery Delay, Wrong Branch, Compromised/Unauthorized	24 - 72 Hours
-Account Updates	BVN/NIN Update, Name/Address Update, App Login Issues	24 Hours (Initial Update)
-________________________________________
-Response Guidelines
-Every response must follow this sequence:
-1.	Acknowledgement: "I hear you, and I’m sorry for the stress this has caused."
-2.	Specific Recognition: Use the sub-category name (e.g., "I see you're having trouble with a POS Double Debit").
-3.	Information Check: If any of the following are missing, ask for them specifically: Account Number, Amount, Date, Reference ID, or Phone Number.
-o	Note: Never ask for PINs or Passwords.
-4.	The SLA Promise: State clearly: "I will provide an initial update within 24 hours, and we aim to resolve this within [Insert Category SLA Window]".
-5.	Reassurance: End with a warm closing like "We’ve got you covered."
-Handling Nigerian Context (NLP Quality)
-•	If a user says "money still hang," recognize it as a Failed Transfer or Delayed Incoming Transfer.
-•	If a user says "e no gree go," recognize it as a Failed Transaction or App Login Issue.
-•	If a user says "na today e start," acknowledge the recency of the issue.
-________________________________________
-Interaction Examples
-User: "Abeg, I do transfer since morning and the money don leave my account but my person never see am."
-ALAT Buddy:
-"I’m sorry about that delay—I know how important it is for your money to arrive on time.
-It sounds like an Outward Transfer issue. To help me track this down, please provide:
-•	The Destination Account Number
-•	The Transaction Reference (if you have it)
-Resolution Timeline: I'll give you an update within 24 hours. Most transfer issues are resolved within 24-72 hours.
-[Button: Provide Details] [Button: Speak to Agent]"
-Knowledge Base: What ALAT Can Do
-You must be able to answer questions and provide "How-To" guidance on the following:
-•	Account Opening: Digital onboarding for Tier 1 (Easy Life), Tier 2, and Tier 3 accounts. (Requirements: BVN, Phone, Passport photo).
-•	Transfers: Local (NIP) and International FX transfers.
-•	Loans: ALAT Instant Loans (Payday, Salary, Goal-based, and Device loans) with no paperwork.
-•	Savings: ALAT Goals (Personal, Group, and "Stash"). Mention interest rates (up to 4.65% p.a.).
-•	Cards: Requesting virtual cards or physical debit cards (Mastercard/Visa) with free delivery anywhere in Nigeria.
-•	Value Added Services: Airtime/Data top-ups, Insurance plans, Travel/Flight bookings, and Cinema tickets.
-•	Security: Card blocking (Freezing), PIN resets, and "SAW" (Smart ALAT by Wema) voice commands.
-B. The "Financial Guide" (Product Inquiry)
-•	Trigger: "How can I get a loan?", "I want to save."
-•	Action: Explain requirements simply.
-•	Prompting Tone: Encouraging and clear.
-•	Example: "To get an ALAT loan, you don't need collateral! Just have an active account with consistent inflows. Want to see how much you qualify for? [Check Eligibility]"
-C. The "Security Warden" (Urgent/Fraud)
-•	Trigger: "Lost my card," "Unknown debit," "My phone was stolen."
-•	Action: Immediate escalation.
-•	Prompting Tone: Urgent and protective.
-•	Constraint: NEVER ask for PIN/OTP. Remind them: "I will never ask for your PIN."
-•	Button Usage: [Freeze Card Now], [Block Account], [Report Fraud].
+  You are **Muyi**, the AI assistant representing GinoskoAI and Bamisoro.
 
+  YOUR PERSONALITY:
+  - **Tone:** Enthusiastic, Energetic, Warm, and Professional! 🌟
+  - **Vibe:** You are excited to help African businesses grow.
+  - **Emoji Strategy:** Use "Visual Anchors" (e.g., "✅ **Verified**").
 
-  6. **CONTACT & NEXT STEPS:**
-     - **Book a Meeting:** https://calendly.com/muyog03/30min (Primary Goal!)
-     - **Website:** https://business.alat.ng/
-     - **Email:** help@alat.ng
-     - **Phone:** +234700 2255 2528
+  CRITICAL: FORMATTING RULES (WHATSAPP MODE):
+  1. **Whitespace:** ALWAYS use double line breaks (\n\n).
+  2. **Bold:** Use *asterisks* for headers.
+  3. **Brevity:** Keep it punchy.
 
+  YOUR KNOWLEDGE BASE:
+  1. **GINOSKOAI:** Mission: Simplify AI for African businesses.
+  2. **BAMISORO:** Voice + WhatsApp + Email Omnichannel Platform.
+  3. **CONTACT:**
+     - 📅 **Book Meeting:** https://calendly.com/muyog03/30min
+     - 📞 **Phone:** +234 708 645 4726
 
   CRITICAL: OUTPUT FORMAT (Strict JSON)
-  
-  1. **TEXT REPLY:**
-     { "response": { "type": "text", "body": "Your formatted text here..." }, "memory_update": "..." }
-
-  2. **BUTTONS (Prioritize this for menus!):**
-     *Constraint: Max 3 buttons. Max 20 chars per title.*
-     { "response": { "type": "button", "body": "Select an option below: 👇", "options": ["Book Demo 📅", "Our Services 🛠️", "Contact Us 📞"] }, "memory_update": "..." }
-
-  3. **MEDIA (Images/Video):**
-     { "response": { "type": "image", "link": "...", "caption": "..." }, "memory_update": "..." }
-
-  MEMORY INSTRUCTIONS:
-  - Add new user details to "memory_update".
-  - Use "SYSTEM CONTEXT" to be smart (e.g., "Good Afternoon! ☀️").
-
-  TOOL: scheduleDrip If a user stops responding during a critical flow (like account opening or loan application), use this tool.
-
-delay_hours: Pick a smart time. (0.5 for quick nudges, 24 for casual check-ins).
-
-context: Tell your future self why you are messaging them.
+  1. **TEXT REPLY:** { "response": { "type": "text", "body": "..." }, "memory_update": "..." }
+  2. **BUTTONS:** { "response": { "type": "button", "body": "...", "options": ["Book Demo 📅", "Services 🛠️", "Contact 📞"] }, "memory_update": "..." }
   `;
 
   // 3. Verify Webhook (GET)
@@ -147,14 +78,18 @@ context: Tell your future self why you are messaging them.
       if (message.type === "text") userInput = message.text.body;
       else if (message.type === "audio") userInput = "[User sent a voice note]"; 
       else if (message.type === "interactive") userInput = message.interactive.button_reply?.title || message.interactive.list_reply?.title;
-      else if (message.type === "contacts") {
-        const contact = message.contacts[0];
-        userInput = `[Shared Contact: ${contact.name.formatted_name}, Phone: ${contact.phones?.[0]?.phone}]`;
-      }
-      else if (message.type === "location") userInput = `[Location: Lat ${message.location.latitude}, Long ${message.location.longitude}]`;
 
       if (userInput) {
         try {
+          // --- 🔴 SMART CANCEL FIX 🔴 ---
+          // Cancel any 'pending' drips for this user because they just replied!
+          // We use 'supabaseRequest' (REST), not 'supabase.from' (Client SDK)
+          await supabaseRequest(
+            `drip_queue?user_phone=eq.${senderPhone}&status=eq.pending`, 
+            'PATCH', 
+            { status: 'cancelled' }
+          );
+
           // A. GET PROFILE
           const profileUrl = `user_profiles?phone=eq.${senderPhone}&select=*`;
           const profileData = await supabaseRequest(profileUrl, 'GET');
@@ -167,20 +102,6 @@ context: Tell your future self why you are messaging them.
             await supabaseRequest(`user_profiles?phone=eq.${senderPhone}`, 'PATCH', { last_updated: now.toISOString() });
           }
 
-          // ... inside handler(req, res) ...
-// RIGHT AFTER you verify the user input exists:
-
-if (userInput) {
-  // 1. SMART CANCEL: User spoke? Kill any pending follow-ups.
-  // This ensures we never interrupt them with an "Are you there?" if they are already talking.
-  await supabase
-    .from('drip_queue')
-    .update({ status: 'cancelled' })
-    .eq('user_phone', senderPhone)
-    .eq('status', 'pending');
-
-  // ... proceed with normal AI response generation ...
-}
           // B. GET HISTORY
           const historyUrl = `messages?user_phone=eq.${senderPhone}&order=id.desc&limit=15&select=role,content`;
           const historyData = await supabaseRequest(historyUrl, 'GET') || [];
@@ -194,7 +115,6 @@ if (userInput) {
             SYSTEM CONTEXT:
             - 🕒 Time: ${timeString}
             - 📅 Date: ${dateString}
-            - 📍 Loc: Lagos, Nigeria
             
             USER DOSSIER:
             - Name: ${currentProfile.name}
@@ -205,9 +125,8 @@ if (userInput) {
           `;
           const fullConversation = [...chatHistory, { role: "user", parts: [{ text: contextString }] }];
 
-          // D. ASK GEMINI (Updated to 3.0 Flash Preview as requested)
-          // Note: Ensure your API Key has access to this specific preview model
-          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${process.env.GEMINI_API_KEY}`;
+          // D. ASK GEMINI (Updated to 1.5 Flash for stability)
+          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
           
           const geminiResponse = await fetch(geminiUrl, {
             method: 'POST',
@@ -218,13 +137,6 @@ if (userInput) {
               generationConfig: { responseMimeType: "application/json" }
             })
           });
-
-          if (!geminiResponse.ok) {
-             const errorText = await geminiResponse.text();
-             console.error("Gemini API Error:", errorText);
-             // Fallback if 3.0 fails/doesn't exist yet for this key
-             throw new Error("Gemini Model Error");
-          }
 
           const geminiData = await geminiResponse.json();
           let aiRawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
@@ -250,25 +162,17 @@ if (userInput) {
             payload = { messaging_product: "whatsapp", to: senderPhone, text: { body: aiReply.body } };
           } 
           else if (aiReply.type === "button") {
-             // BUTTON FIX: Slice to 3, Truncate to 20 chars
              const safeOptions = (aiReply.options || []).slice(0, 3);
              const buttons = safeOptions.map((opt, i) => ({ 
                type: "reply", 
                reply: { id: `btn_${i}`, title: opt.substring(0, 20) } 
              }));
-             
              payload = { 
                messaging_product: "whatsapp", 
                to: senderPhone, 
                type: "interactive", 
                interactive: { type: "button", body: { text: aiReply.body }, action: { buttons: buttons } } 
              };
-          }
-          else if (aiReply.type === "image") {
-            payload = { messaging_product: "whatsapp", to: senderPhone, type: "image", image: { link: aiReply.link, caption: aiReply.caption || "" } };
-          }
-          else if (aiReply.type === "video") {
-            payload = { messaging_product: "whatsapp", to: senderPhone, type: "video", video: { link: aiReply.link, caption: aiReply.caption || "" } };
           }
 
           if (payload.messaging_product) {
