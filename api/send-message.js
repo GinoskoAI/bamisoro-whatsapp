@@ -1,5 +1,5 @@
 // api/send-message.js
-// VERSION: Multi-Variable Support (Name + Summary)
+// VERSION: Two-Variable Support (1: Name, 2: Message)
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
@@ -12,9 +12,9 @@ export default async function handler(req, res) {
   const payloadData = { ...data, ...req.query };
   const { phone, name, message } = payloadData;
 
-  console.log(`👉 Sending Personalized Follow-up to: ${name} (${phone})`);
+  console.log(`👉 Attempting to send to ${name} at ${phone}`);
 
-  if (!phone || !message || !name) {
+  if (!phone || !name || !message) {
     return res.status(400).json({ error: 'Missing phone, name, or message', received: payloadData });
   }
 
@@ -25,7 +25,8 @@ export default async function handler(req, res) {
       'Content-Type': 'application/json' 
     };
 
-    const TEMPLATE_NAME = "call_follow_up_v3"; // Ensure this matches Meta exactly
+    // ⚠️ CRITICAL: Ensure this matches the ID in your Meta Dashboard exactly.
+    const TEMPLATE_NAME = "call_follow_up_v3"; 
 
     const metaPayload = {
       messaging_product: "whatsapp",
@@ -33,13 +34,13 @@ export default async function handler(req, res) {
       type: "template",
       template: {
         name: TEMPLATE_NAME, 
-        language: { code: "en" }, 
+        language: { code: "en" }, // Forced to 'en' based on previous successful detection
         components: [
           {
             type: "body",
             parameters: [
-              { type: "text", text: name },    // This maps to {{1}} (Customer Name)
-              { type: "text", text: message } // This maps to {{2}} (Summary/Link)
+              { type: "text", text: name },    // This fills {{1}}
+              { type: "text", text: message }  // This fills {{2}}
             ]
           }
         ]
@@ -47,37 +48,41 @@ export default async function handler(req, res) {
     };
 
     const metaResponse = await fetch(WHATSAPP_URL, { 
-      method: 'POST', headers: HEADERS, body: JSON.stringify(metaPayload) 
+      method: 'POST', 
+      headers: HEADERS, 
+      body: JSON.stringify(metaPayload) 
     });
 
     const metaData = await metaResponse.json();
 
     if (!metaResponse.ok) {
-      console.error("❌ Meta Error:", JSON.stringify(metaData));
-      return res.status(500).json({ error: 'Meta Rejected Request', details: metaData });
+      console.error("❌ Meta Rejected Request:", JSON.stringify(metaData));
+      return res.status(500).json({ error: 'Meta Error', details: metaData });
     }
 
-    // --- LOG TO SUPABASE ---
-    const supabaseUrl = `${process.env.SUPABASE_URL}/rest/v1/messages`;
+    console.log("✅ Message Sent Successfully!");
+
+    // Log to Supabase for the Chatbot's Unified Memory
     const supabaseHeaders = {
       'apikey': process.env.SUPABASE_KEY,
       'Authorization': `Bearer ${process.env.SUPABASE_KEY}`,
       'Content-Type': 'application/json'
     };
 
-    await fetch(supabaseUrl, {
-      method: 'POST', headers: supabaseHeaders,
+    await fetch(`${process.env.SUPABASE_URL}/rest/v1/messages`, {
+      method: 'POST', 
+      headers: supabaseHeaders,
       body: JSON.stringify({
         user_phone: phone,
         role: 'assistant',
-        content: `[Voice Follow-up Sent to ${name}]: ${message}`
+        content: `[Voice Handoff to ${name}]: ${message}`
       })
     });
 
-    return res.status(200).json({ status: 'Personalized message sent' });
+    return res.status(200).json({ status: 'Success' });
 
   } catch (error) {
-    console.error("API Error:", error);
+    console.error("Critical System Error:", error);
     return res.status(500).json({ error: 'Internal Server Error' });
   }
 }
