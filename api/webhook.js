@@ -1,5 +1,5 @@
 // api/webhook.js
-// VERSION: DEBUG MODE (Sends Error Details to WhatsApp)
+// VERSION: GEMINI 3 FLASH PREVIEW (User Specified)
 
 export default async function handler(req, res) {
   
@@ -17,7 +17,6 @@ export default async function handler(req, res) {
     if (body) options.body = JSON.stringify(body);
     
     const response = await fetch(url, options);
-    // DEBUG: Check for Supabase errors
     if (!response.ok) {
         const errText = await response.text();
         throw new Error(`Supabase Error (${endpoint}): ${errText}`);
@@ -29,10 +28,18 @@ export default async function handler(req, res) {
 
   // 2. SYSTEM PROMPT (ALAT)
   const SYSTEM_PROMPT = `
-  You are the **ALAT by Wema AI Assistant**. 
-  Keep answers short, professional, and helpful.
-  Goals: Account Opening, Loans, Support.
-  
+  You are the **ALAT by Wema AI Assistant**. 🟣
+  You represent **ALAT**, Nigeria's first fully digital bank.
+
+  YOUR PERSONALITY:
+  - **Tone:** Professional, Modern, Helpful, and Secure.
+  - **Vibe:** "The Bank of the Future." Friendly but precise.
+
+  YOUR GOALS:
+  1. **Account Opening:** Guide users to open accounts.
+  2. **Loans:** Explain eligibility (Salary earners, business loans).
+  3. **Support:** Help with card requests and app issues.
+
   CRITICAL: OUTPUT JSON ONLY.
   { "response": { "type": "text", "body": "..." }, "memory_update": "..." }
   `;
@@ -61,7 +68,6 @@ export default async function handler(req, res) {
       if (userInput) {
         try {
           // A. GET PROFILE
-          // Wrap in try/catch to identify Supabase failures
           let currentProfile = {};
           try {
             const profileData = await supabaseRequest(`user_profiles?phone=eq.${senderPhone}&select=*`, 'GET');
@@ -70,18 +76,16 @@ export default async function handler(req, res) {
             if (!currentProfile.phone) {
                 await supabaseRequest('user_profiles', 'POST', { phone: senderPhone, name: whatsappName });
             }
-          } catch (dbErr) {
-            // If DB fails, ignore and proceed without memory
-            console.error("DB Error:", dbErr);
-          }
+          } catch (dbErr) { console.error("DB Error:", dbErr); }
 
           // B. PREPARE CONTEXT
           const fullConversation = [
             { role: "user", parts: [{ text: `User: ${whatsappName}\nInput: "${userInput}"` }] }
           ];
 
-          // C. CALL GEMINI
-          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+          // C. CALL GEMINI (USER SPECIFIED MODEL)
+          // Exact model name: gemini-3-flash-preview
+          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${process.env.GEMINI_API_KEY}`;
           
           const geminiResponse = await fetch(geminiUrl, {
             method: 'POST',
@@ -116,32 +120,4 @@ export default async function handler(req, res) {
               headers: WP_HEADERS, 
               body: JSON.stringify({ 
                   messaging_product: "whatsapp", 
-                  to: senderPhone, 
-                  text: { body: aiReply.body } 
-              }) 
-          });
-
-        } catch (error) {
-          // --- ERROR REPORTER ---
-          // This sends the ACTUAL error to your WhatsApp so we can see it.
-          const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
-          const WP_HEADERS = { 
-            'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 
-            'Content-Type': 'application/json' 
-          };
-          await fetch(WHATSAPP_URL, {
-              method: 'POST', 
-              headers: WP_HEADERS, 
-              body: JSON.stringify({ 
-                  messaging_product: "whatsapp", 
-                  to: senderPhone, 
-                  text: { body: `⚠️ DEBUG ERROR: ${error.message}` } 
-              }) 
-          });
-        }
-      }
-    }
-    return res.status(200).json({ status: "ok" });
-  }
-  return res.status(405).json({ error: 'Method Not Allowed' });
-}
+                  to:
