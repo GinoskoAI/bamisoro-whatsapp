@@ -1,5 +1,5 @@
 // api/send-message.js
-// VERSION: Unified - Correct Template ID + Smart Language Retry
+// VERSION: Split Variables (Fixes Newline Error #132018)
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
@@ -10,19 +10,20 @@ export default async function handler(req, res) {
     if (typeof req.body === 'string') try { data = JSON.parse(req.body); } catch(e) {}
   }
   const payloadData = { ...data, ...req.query };
-  const { phone, name, message } = payloadData;
+  const { phone, name, summary, link } = payloadData;
 
-  // ⚠️ CRITICAL: Name of the template in your Meta Dashboard
-  const TEMPLATE_NAME = "call_follow_up_utility"; 
+  const TEMPLATE_NAME = "call_follow_up_final"; // ⚠️ Match this to your new template
 
-  console.log(`👉 Sending ${TEMPLATE_NAME} to ${name} (${phone})`);
+  console.log(`👉 Sending Split Template to ${name} (${phone})`);
 
-  if (!phone || !name || !message) {
-    return res.status(400).json({ error: 'Missing phone, name, or message', received: payloadData });
+  if (!phone || !name || !summary) {
+    return res.status(400).json({ error: 'Missing phone, name, or summary', received: payloadData });
   }
 
-  const LANGUAGES_TO_TRY = ["en", "en_US", "en_GB"];
-  let lastError = null;
+  // 2. SAFETY CLEANER (The Anti-Error Shield)
+  // We remove newlines from variables because Meta forbids them.
+  const cleanSummary = summary.replace(/[\r\n]+/g, ' ').trim();
+  const cleanLink = link ? link.replace(/[\r\n]+/g, '').trim() : "https://ginosko.ai";
 
   try {
     const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
@@ -31,72 +32,61 @@ export default async function handler(req, res) {
       'Content-Type': 'application/json' 
     };
 
-    // 2. SMART RETRY LOOP (Finds the right language version)
-    for (const langCode of LANGUAGES_TO_TRY) {
-      console.log(`🔄 Attempting ${langCode}...`);
-
-      const metaPayload = {
-        messaging_product: "whatsapp",
-        to: phone,
-        type: "template",
-        template: {
-          name: TEMPLATE_NAME, 
-          language: { code: langCode }, 
-          components: [
-            {
-              type: "body",
-              parameters: [
-                { type: "text", text: name },    // Variable {{1}}
-                { type: "text", text: message }  // Variable {{2}}
-              ]
-            }
-          ]
-        }
-      };
-
-      const response = await fetch(WHATSAPP_URL, { 
-        method: 'POST', 
-        headers: HEADERS, 
-        body: JSON.stringify(metaPayload) 
-      });
-
-      const metaData = await response.json();
-
-      if (response.ok) {
-        console.log(`✅ SUCCESS: Sent via ${langCode}`);
-        
-        // 3. LOG TO SUPABASE (Unified Memory)
-        const supabaseHeaders = {
-          'apikey': process.env.SUPABASE_KEY,
-          'Authorization': `Bearer ${process.env.SUPABASE_KEY}`,
-          'Content-Type': 'application/json'
-        };
-
-        await fetch(`${process.env.SUPABASE_URL}/rest/v1/messages`, {
-          method: 'POST', 
-          headers: supabaseHeaders,
-          body: JSON.stringify({
-            user_phone: phone,
-            role: 'assistant',
-            content: `[Voice Follow-up to ${name}]: ${message}`
-          })
-        });
-
-        return res.status(200).json({ status: 'Success', language: langCode });
+    const metaPayload = {
+      messaging_product: "whatsapp",
+      to: phone,
+      type: "template",
+      template: {
+        name: TEMPLATE_NAME, 
+        language: { code: "en" }, 
+        components: [
+          {
+            type: "body",
+            parameters: [
+              { type: "text", text: name },          // {{1}}
+              { type: "text", text: cleanSummary },  // {{2}}
+              { type: "text", text: cleanLink }      // {{3}}
+            ]
+          }
+        ]
       }
+    };
 
-      lastError = metaData;
-      // If the error isn't about the name missing, the issue is likely the parameters.
-      if (metaData.error && !metaData.error.message.includes("does not exist")) {
-        console.error("❌ Template exists but parameters are wrong:", JSON.stringify(metaData));
-        break; 
-      }
+    const metaResponse = await fetch(WHATSAPP_URL, { 
+      method: 'POST', 
+      headers: HEADERS, 
+      body: JSON.stringify(metaPayload) 
+    });
+
+    const metaData = await metaResponse.json();
+
+    if (!metaResponse.ok) {
+      console.error("❌ Meta Error:", JSON.stringify(metaData));
+      return res.status(500).json({ error: 'Meta Error', details: metaData });
     }
 
-    return res.status(500).json({ error: 'Failed all attempts', details: lastError });
+    // 3. LOG TO SUPABASE
+    // We combine them back together for the Chatbot's memory
+    const fullContent = `Summary: ${cleanSummary}\nLink: ${cleanLink}`;
+    
+    await fetch(`${process.env.SUPABASE_URL}/rest/v1/messages`, {
+      method: 'POST', 
+      headers: {
+        'apikey': process.env.SUPABASE_KEY,
+        'Authorization': `Bearer ${process.env.SUPABASE_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        user_phone: phone,
+        role: 'assistant',
+        content: `[Voice Handoff]: ${fullContent}`
+      })
+    });
+
+    return res.status(200).json({ status: 'Success' });
 
   } catch (error) {
-    console.error("Critical System Error:", error);
+    console.error("API Error:", error);
     return res.status(500).json({ error: 'Internal Server Error' });
   }
 }
