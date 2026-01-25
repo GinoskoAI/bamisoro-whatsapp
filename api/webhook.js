@@ -137,4 +137,53 @@ export default async function handler(req, res) {
           const geminiData = await geminiResponse.json();
           let aiRawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
           
-          // D. ROBUST PAR
+          // D. ROBUST PARSING
+          let aiOutput;
+          try {
+             const cleanJson = aiRawText.replace(/```json|```/g, "").trim();
+             aiOutput = JSON.parse(cleanJson);
+          } catch (e) {
+             // Fallback: If AI speaks plain text, just send it.
+             if (aiRawText.length > 0) {
+                aiOutput = { response: { type: "text", body: aiRawText } };
+             } else {
+                aiOutput = { response: { type: "text", body: "I'm having a slight connection issue. Could you please rephrase that?" } };
+             }
+          }
+
+          // E. UPDATE MEMORY
+          if (aiOutput.memory_update) {
+            const oldSummary = currentProfile.summary || "";
+            const newSummary = (oldSummary + "\n- " + aiOutput.memory_update).slice(-3000); 
+            await supabaseRequest(`user_profiles?phone=eq.${senderPhone}`, 'PATCH', { summary: newSummary });
+          }
+
+          // F. SEND TO WHATSAPP
+          const aiReply = aiOutput.response || { type: "text", body: "One moment..." };
+          const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
+          const HEADERS = { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' };
+          
+          let payload = {};
+
+          if (aiReply.type === "text") {
+            payload = { messaging_product: "whatsapp", to: senderPhone, text: { body: aiReply.body } };
+          } 
+          else if (aiReply.type === "button") {
+             const safeOptions = (aiReply.options || []).slice(0, 3);
+             const buttons = safeOptions.map((opt, i) => ({ type: "reply", reply: { id: `btn_${i}`, title: opt.substring(0, 20) } }));
+             payload = { messaging_product: "whatsapp", to: senderPhone, type: "interactive", interactive: { type: "button", body: { text: aiReply.body }, action: { buttons: buttons } } };
+          }
+
+          if (payload.messaging_product) {
+            await fetch(WHATSAPP_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
+            await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'assistant', content: aiReply.type === 'text' ? aiReply.body : `[Sent ${aiReply.type}]` });
+            await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'user', content: userInput });
+          }
+
+        } catch (error) { console.error("CRITICAL ERROR:", error); }
+      }
+    }
+    return res.status(200).json({ status: "ok" });
+  }
+  return res.status(405).json({ error: 'Method Not Allowed' });
+}
