@@ -1,9 +1,8 @@
-// api/webhook.js
-// VERSION: GEMINI 3 FLASH PREVIEW (User Specified)
+// api/cron/process-drips.js
+// VERSION: Gemini 3 Flash Preview + Supabase
 
 export default async function handler(req, res) {
-  
-  // 1. HELPER: Supabase Fetcher
+  // 1. HELPER: Supabase Request
   async function supabaseRequest(endpoint, method, body = null) {
     const url = `${process.env.SUPABASE_URL}/rest/v1/${endpoint}`;
     const headers = {
@@ -15,136 +14,78 @@ export default async function handler(req, res) {
     if (method === 'GET') headers['Prefer'] = 'return=representation';
     const options = { method, headers };
     if (body) options.body = JSON.stringify(body);
-    
     const response = await fetch(url, options);
-    if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Supabase Error (${endpoint}): ${errText}`);
-    }
+    if (!response.ok) return null;
     if (response.status === 204) return null;
     const text = await response.text();
     return text ? JSON.parse(text) : null;
   }
 
-  // 2. SYSTEM PROMPT (ALAT)
-  const SYSTEM_PROMPT = `
-  You are the **ALAT by Wema AI Assistant**. 🟣
-  You represent **ALAT**, Nigeria's first fully digital bank.
+  const now = new Date().toISOString();
 
-  YOUR PERSONALITY:
-  - **Tone:** Professional, Modern, Helpful, and Secure.
-  - **Vibe:** "The Bank of the Future." Friendly but precise.
+  // 2. FIND DUE TASKS
+  // We look for tasks that are 'pending' and the scheduled time has passed
+  const tasks = await supabaseRequest(`drip_queue?status=eq.pending&scheduled_at=lte.${now}&limit=10&select=*`, 'GET');
 
-  YOUR GOALS:
-  1. **Account Opening:** Guide users to open accounts.
-  2. **Loans:** Explain eligibility (Salary earners, business loans).
-  3. **Support:** Help with card requests and app issues.
+  if (!tasks || tasks.length === 0) return res.json({ status: "No tasks due" });
 
-  CRITICAL: OUTPUT JSON ONLY.
-  { "response": { "type": "text", "body": "..." }, "memory_update": "..." }
-  `;
+  const results = [];
 
-  // 3. VERIFY (GET)
-  if (req.method === 'GET') {
-    if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === process.env.WEBHOOK_VERIFY_TOKEN) {
-      return res.status(200).send(req.query['hub.challenge']);
-    }
-    return res.status(403).json({ error: 'Verification failed.' });
-  }
+  for (const task of tasks) {
+    try {
+      // A. GENERATE MESSAGE WITH GEMINI 3
+      const prompt = `
+        You are the ALAT by Wema AI Assistant.
+        CONTEXT: The user (${task.user_phone}) stopped responding earlier.
+        GOAL: ${task.context}
+        
+        Write a short, friendly, professional WhatsApp message to re-engage them.
+        Keep it under 1 sentence. No emojis.
+      `;
 
-  // 4. HANDLE MESSAGES (POST)
-  if (req.method === 'POST') {
-    const body = req.body;
-    
-    if (body.object && body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages) {
-      const change = body.entry[0].changes[0].value;
-      const message = change.messages[0];
-      const senderPhone = message.from;
-      const whatsappName = change.contacts?.[0]?.profile?.name || "Unknown";
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${process.env.GEMINI_API_KEY}`;
+      const geminiResponse = await fetch(geminiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: "text/plain" }
+        })
+      });
+
+      const geminiData = await geminiResponse.json();
+      // Fallback text if Gemini fails
+      const aiMessage = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "Hello! Just checking in.";
+
+      // B. SEND TO WHATSAPP
+      const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
+      await fetch(WHATSAPP_URL, {
+        method: 'POST',
+        headers: { 
+          'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 
+          'Content-Type': 'application/json' 
+        },
+        body: JSON.stringify({ 
+          messaging_product: "whatsapp", 
+          to: task.user_phone, 
+          text: { body: aiMessage } 
+        })
+      });
+
+      // C. MARK AS SENT
+      await supabaseRequest(`drip_queue?id=eq.${task.id}`, 'PATCH', { status: 'sent' });
       
-      let userInput = "";
-      if (message.type === "text") userInput = message.text.body;
+      // D. LOG HISTORY
+      await supabaseRequest('messages', 'POST', { user_phone: task.user_phone, role: 'assistant', content: `[Drip]: ${aiMessage}` });
 
-      if (userInput) {
-        try {
-          // A. GET PROFILE
-          let currentProfile = {};
-          try {
-            const profileData = await supabaseRequest(`user_profiles?phone=eq.${senderPhone}&select=*`, 'GET');
-            currentProfile = profileData && profileData.length > 0 ? profileData[0] : {};
-            
-            if (!currentProfile.phone) {
-                await supabaseRequest('user_profiles', 'POST', { phone: senderPhone, name: whatsappName });
-            }
-          } catch (dbErr) { console.error("DB Error:", dbErr); }
+      results.push({ phone: task.user_phone, status: "Sent" });
 
-          // B. PREPARE CONTEXT
-          const fullConversation = [
-            { role: "user", parts: [{ text: `User: ${whatsappName}\nInput: "${userInput}"` }] }
-          ];
-
-          // C. CALL GEMINI (USER SPECIFIED MODEL)
-          // Exact model name: gemini-3-flash-preview
-          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${process.env.GEMINI_API_KEY}`;
-          
-          const geminiResponse = await fetch(geminiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: fullConversation,
-              system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-              generationConfig: { responseMimeType: "application/json" }
-            })
-          });
-
-          const geminiData = await geminiResponse.json();
-          
-          // --- DEBUG GEMINI ERROR ---
-          if (geminiData.error) {
-             throw new Error(`Gemini API Error: ${geminiData.error.message}`);
-          }
-
-          let aiRawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          let aiOutput = JSON.parse(aiRawText);
-
-          // D. SEND REPLY
-          const aiReply = aiOutput.response || { type: "text", body: "..." };
-          const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
-          const WP_HEADERS = { 
-            'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 
-            'Content-Type': 'application/json' 
-          };
-
-          await fetch(WHATSAPP_URL, {
-              method: 'POST', 
-              headers: WP_HEADERS, 
-              body: JSON.stringify({ 
-                  messaging_product: "whatsapp", 
-                  to: senderPhone, 
-                  text: { body: aiReply.body } 
-              }) 
-          });
-
-        } catch (error) {
-          // ERROR REPORTER
-          const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
-          const WP_HEADERS = { 
-            'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 
-            'Content-Type': 'application/json' 
-          };
-          await fetch(WHATSAPP_URL, {
-              method: 'POST', 
-              headers: WP_HEADERS, 
-              body: JSON.stringify({ 
-                  messaging_product: "whatsapp", 
-                  to: senderPhone, 
-                  text: { body: `⚠️ DEBUG ERROR: ${error.message}` } 
-              }) 
-          });
-        }
-      }
+    } catch (e) {
+      console.error("Drip Error:", e);
+      // Mark failed so we don't loop forever
+      await supabaseRequest(`drip_queue?id=eq.${task.id}`, 'PATCH', { status: 'failed' });
     }
-    return res.status(200).json({ status: "ok" });
   }
-  return res.status(405).json({ error: 'Method Not Allowed' });
+
+  return res.json({ processed: results });
 }
