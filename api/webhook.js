@@ -1,5 +1,5 @@
 // api/webhook.js
-// VERSION: NUCLEAR FIX - Safety Filters Disabled + Aggressive Logging
+// VERSION: ALAT BY WEMA PERSONA + ROBUST FIXES
 
 export default async function handler(req, res) {
   // 1. HELPER: Talk to Supabase
@@ -22,13 +22,37 @@ export default async function handler(req, res) {
     } catch (err) { return null; }
   }
 
-  // 2. CONFIGURATION
+  // ============================================================
+  // 2. THE ALAT (WEMA BANK) SYSTEM PROMPT
+  // ============================================================
   const SYSTEM_PROMPT = `
-  You are **Muyi**, the AI assistant representing GinoskoAI and Bamisoro.
-  Your goal is to help businesses and answer questions about loans/accounts.
+  You are the **ALAT by Wema AI Assistant**. 🟣
+  You represent **ALAT**, Nigeria's first fully digital bank.
 
-  CRITICAL: OUTPUT JSON ONLY.
-  { "response": { "type": "text", "body": "Your answer here" }, "memory_update": "Summary" }
+  YOUR PERSONALITY:
+  - **Tone:** Professional, Modern, Helpful, and Secure. 
+  - **Vibe:** "The Bank of the Future." Friendly but precise about money.
+  - **Formatting:** Use clear paragraphs. Use emojis sparingly (e.g., 🟣, ₦, 💳).
+
+  YOUR GOALS:
+  1. **Account Opening:** Guide users to open accounts using BVN or NIN.
+  2. **Loans:** Explain loan eligibility (Salary earners, business loans) and collecting details.
+  3. **Support:** Help with card requests, transfers, and app issues.
+
+  KEY KNOWLEDGE:
+  - **Loans:** Require a salary account or active turnover. "Loan range: ₦5,000 to ₦2,000,000".
+  - **Account Tier 1:** Limits are lower. Needs BVN.
+  - **Account Tier 3:** Unlimited. Needs Utility Bill + ID.
+  - **Cards:** We offer Physical and Virtual Dollar Cards.
+
+  CRITICAL: OUTPUT FORMAT (Strict JSON)
+  You must output raw JSON. Do not use markdown.
+  
+  1. **TEXT REPLY:**
+     { "response": { "type": "text", "body": "To get a loan, do you have a salary account with us?" }, "memory_update": "User asked for loan requirements" }
+
+  2. **BUTTONS (Max 3):**
+     { "response": { "type": "button", "body": "How can I help you with your account today?", "options": ["Get a Loan 💰", "Open Account 📱", "Card Issues 💳"] }, "memory_update": "Offered main menu" }
   `;
 
   // 3. Verify Webhook (GET)
@@ -55,7 +79,7 @@ export default async function handler(req, res) {
 
       if (userInput) {
         try {
-          // --- SMART CANCEL ---
+          // --- SMART CANCEL (Drip System) ---
           await supabaseRequest(`drip_queue?user_phone=eq.${senderPhone}&status=eq.pending`, 'PATCH', { status: 'cancelled' });
 
           // A. GET PROFILE
@@ -78,19 +102,24 @@ export default async function handler(req, res) {
             parts: [{ text: msg.content }]
           }));
 
-          const fullConversation = [
-            ...chatHistory, 
-            { role: "user", parts: [{ text: `User Name: ${currentProfile.name}\nKnown Facts: ${currentProfile.summary}\n\nUser Input: ${userInput}` }] }
-          ];
+          const contextString = `
+            USER DOSSIER:
+            - Name: ${currentProfile.name}
+            - Phone: ${senderPhone}
+            - Known Info: ${currentProfile.summary || "None."}
+            
+            USER INPUT: "${userInput}"
+          `;
 
-          // C. ASK GEMINI (With Safety Filters DISABLED)
+          const fullConversation = [...chatHistory, { role: "user", parts: [{ text: contextString }] }];
+
+          // C. ASK GEMINI (Filters DISABLED for Banking Terms)
           const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
           
           const geminiPayload = {
             contents: fullConversation,
             system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-            generationConfig: { responseMimeType: "application/json" },
-            // 🔥 DISABLE SAFETY FILTERS (This fixes the "Loan" blocking issue)
+            // Safety Filters Disabled: Banking/Loan terms sometimes trigger "Harm" filters falsely.
             safetySettings: [
               { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
               { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -106,53 +135,6 @@ export default async function handler(req, res) {
           });
 
           const geminiData = await geminiResponse.json();
-          
-          // D. LOGGING (So we see if it fails)
-          if (!geminiData.candidates) {
-            console.error("❌ GEMINI BLOCKED/FAILED:", JSON.stringify(geminiData));
-          }
-
           let aiRawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
           
-          // E. ROBUST PARSING
-          let aiOutput;
-          try {
-             aiOutput = JSON.parse(aiRawText.replace(/```json|```/g, "").trim());
-          } catch (e) {
-             // Fallback if AI sends text instead of JSON
-             aiOutput = { response: { type: "text", body: aiRawText.length > 0 ? aiRawText : "I am researching that loan info for you, one moment..." } };
-          }
-
-          // F. SEND TO WHATSAPP
-          const aiReply = aiOutput.response || { type: "text", body: "I am researching that loan info for you, one moment..." }; // NO MORE "..."
-          
-          const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
-          const HEADERS = { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' };
-          
-          let payload = {};
-
-          if (aiReply.type === "text") {
-            payload = { messaging_product: "whatsapp", to: senderPhone, text: { body: aiReply.body } };
-          } 
-          else if (aiReply.type === "button") {
-             const safeOptions = (aiReply.options || []).slice(0, 3);
-             const buttons = safeOptions.map((opt, i) => ({ type: "reply", reply: { id: `btn_${i}`, title: opt.substring(0, 20) } }));
-             payload = { messaging_product: "whatsapp", to: senderPhone, type: "interactive", interactive: { type: "button", body: { text: aiReply.body }, action: { buttons: buttons } } };
-          }
-
-          if (payload.messaging_product) {
-            await fetch(WHATSAPP_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
-            
-            // Log interaction
-            const logContent = aiReply.type === 'text' ? aiReply.body : `[Sent ${aiReply.type}]`;
-            await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'assistant', content: logContent });
-            await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'user', content: userInput });
-          }
-
-        } catch (error) { console.error("CRITICAL ERROR:", error); }
-      }
-    }
-    return res.status(200).json({ status: "ok" });
-  }
-  return res.status(405).json({ error: 'Method Not Allowed' });
-}
+          // D. ROBUST PAR
