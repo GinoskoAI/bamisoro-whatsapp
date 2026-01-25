@@ -167,6 +167,20 @@ context: Tell your future self why you are messaging them.
             await supabaseRequest(`user_profiles?phone=eq.${senderPhone}`, 'PATCH', { last_updated: now.toISOString() });
           }
 
+          // ... inside handler(req, res) ...
+// RIGHT AFTER you verify the user input exists:
+
+if (userInput) {
+  // 1. SMART CANCEL: User spoke? Kill any pending follow-ups.
+  // This ensures we never interrupt them with an "Are you there?" if they are already talking.
+  await supabase
+    .from('drip_queue')
+    .update({ status: 'cancelled' })
+    .eq('user_phone', senderPhone)
+    .eq('status', 'pending');
+
+  // ... proceed with normal AI response generation ...
+}
           // B. GET HISTORY
           const historyUrl = `messages?user_phone=eq.${senderPhone}&order=id.desc&limit=15&select=role,content`;
           const historyData = await supabaseRequest(historyUrl, 'GET') || [];
