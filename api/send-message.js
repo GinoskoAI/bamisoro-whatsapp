@@ -1,36 +1,45 @@
 // api/send-message.js
-// VERSION: Split Variables (Fixes Newline Error #132018)
+// VERSION: Debug Mode (Tells you exactly what is missing)
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
-
-  // 1. UNIVERSAL PARSER
+  // 1. Parse Data safely
   let data = req.body;
   if (!data || (typeof data === 'object' && Object.keys(data).length === 0)) {
     if (typeof req.body === 'string') try { data = JSON.parse(req.body); } catch(e) {}
   }
   const payloadData = { ...data, ...req.query };
-  const { phone, name, summary, link } = payloadData;
+  let { phone, name, summary, link } = payloadData;
 
-  const TEMPLATE_NAME = "call_follow_up_final"; // ⚠️ Match this to your new template
+  // 2. CRITICAL DEBUG LOG
+  // This will show up in your Vercel Logs. Look for this line!
+  console.log("🔍 DIAGNOSTIC REPORT:");
+  console.log(`- Phone Provided? [${phone ? "YES" : "NO"}] -> Value: ${phone}`);
+  console.log(`- Name Provided?  [${name ? "YES" : "NO"}] -> Value: ${name}`);
+  console.log(`- Summary Provided? [${summary ? "YES" : "NO"}] -> Value: ${summary}`);
+  console.log(`- Link Provided?    [${link ? "YES" : "NO"}] -> Value: ${link}`);
 
-  console.log(`👉 Sending Split Template to ${name} (${phone})`);
+  // 3. Fallbacks (To prevent crashing)
+  if (!name) name = "Valued Customer"; // Fallback if AI forgets name
+  if (!summary) summary = "Here are the details from our call."; // Fallback if AI forgets summary
+  if (!link) link = "https://alat.ng"; // Fallback link
 
-  if (!phone || !name || !summary) {
-    return res.status(400).json({ error: 'Missing phone, name, or summary', received: payloadData });
+  // 4. Phone Fixer
+  if (phone) {
+    phone = phone.replace(/[^0-9]/g, '');
+    if (phone.startsWith('0')) phone = '234' + phone.substring(1);
   }
 
-  // 2. SAFETY CLEANER (The Anti-Error Shield)
-  // We remove newlines from variables because Meta forbids them.
-  const cleanSummary = summary.replace(/[\r\n]+/g, ' ').trim();
-  const cleanLink = link ? link.replace(/[\r\n]+/g, '').trim() : "https://ginosko.ai";
+  // 5. Final Gatekeeper
+  if (!phone) {
+    console.error("❌ FAILURE: Phone number is completely missing.");
+    return res.status(400).json({ error: 'Phone is missing', debug: payloadData });
+  }
 
+  // 6. Send to Meta
   try {
-    const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
-    const HEADERS = { 
-      'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 
-      'Content-Type': 'application/json' 
-    };
+    const TEMPLATE_NAME = "call_follow_up_final"; // Check this name!
+    const cleanSummary = summary.replace(/[\r\n]+/g, ' ').trim();
+    const cleanLink = link.replace(/[\r\n]+/g, '').trim();
 
     const metaPayload = {
       messaging_product: "whatsapp",
@@ -43,50 +52,32 @@ export default async function handler(req, res) {
           {
             type: "body",
             parameters: [
-              { type: "text", text: name },          // {{1}}
-              { type: "text", text: cleanSummary },  // {{2}}
-              { type: "text", text: cleanLink }      // {{3}}
+              { type: "text", text: name },
+              { type: "text", text: cleanSummary },
+              { type: "text", text: cleanLink }
             ]
           }
         ]
       }
     };
 
-    const metaResponse = await fetch(WHATSAPP_URL, { 
+    const response = await fetch(`https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`, { 
       method: 'POST', 
-      headers: HEADERS, 
+      headers: { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' }, 
       body: JSON.stringify(metaPayload) 
     });
 
-    const metaData = await metaResponse.json();
+    const metaData = await response.json();
 
-    if (!metaResponse.ok) {
+    if (!response.ok) {
       console.error("❌ Meta Error:", JSON.stringify(metaData));
       return res.status(500).json({ error: 'Meta Error', details: metaData });
     }
 
-    // 3. LOG TO SUPABASE
-    // We combine them back together for the Chatbot's memory
-    const fullContent = `Summary: ${cleanSummary}\nLink: ${cleanLink}`;
-    
-    await fetch(`${process.env.SUPABASE_URL}/rest/v1/messages`, {
-      method: 'POST', 
-      headers: {
-        'apikey': process.env.SUPABASE_KEY,
-        'Authorization': `Bearer ${process.env.SUPABASE_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        user_phone: phone,
-        role: 'assistant',
-        content: `[Voice Handoff]: ${fullContent}`
-      })
-    });
-
     return res.status(200).json({ status: 'Success' });
 
   } catch (error) {
-    console.error("API Error:", error);
-    return res.status(500).json({ error: 'Internal Server Error' });
+    console.error("System Error:", error);
+    return res.status(500).json({ error: error.message });
   }
 }
