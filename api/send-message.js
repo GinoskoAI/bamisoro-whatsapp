@@ -38,9 +38,15 @@ export default async function handler(req, res) {
   // 6. Send to Meta
   try {
     const TEMPLATE_NAME = "call_follow_up_final"; // Check this name!
-    const cleanSummary = summary.replace(/[\r\n]+/g, ' ').trim();
-    const cleanLink = link.replace(/[\r\n]+/g, '').trim();
+    // 1. CAPTURE & CLEAN THE SUMMARY (Handle "summary" or "message")
+    let rawSummary = summary || message || "No summary provided."; 
+    // Ensure it's a string and clean newlines
+    const cleanSummary = String(rawSummary).replace(/[\r\n]+/g, ' ').trim().substring(0, 1000); // Limit length to be safe
 
+    // 2. CLEAN THE LINK
+    let rawLink = link || "https://www.alat.ng";
+    const cleanLink = String(rawLink).replace(/[\r\n]+/g, '').trim();
+    
     const metaPayload = {
       messaging_product: "whatsapp",
       to: phone,
