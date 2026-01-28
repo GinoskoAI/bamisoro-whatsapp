@@ -58,9 +58,16 @@ export default async function handler(req, res) {
           {
             type: "body",
             parameters: [
-              { type: "text", text: name },
+              parameters: [
+              // {{1}} Name
+              { type: "text", text: name || "Valued Customer" },
+              
+              // {{2}} Summary (The fixed variable)
               { type: "text", text: cleanSummary },
+              
+              // {{3}} Link
               { type: "text", text: cleanLink }
+            ]
             ]
           }
         ]
