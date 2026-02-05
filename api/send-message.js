@@ -1,96 +1,93 @@
 // api/send-message.js
-// VERSION: Debug Mode (Tells you exactly what is missing)
+// FIXED VERSION: 3-Variable Template Support
 
 export default async function handler(req, res) {
-  // 1. Parse Data safely
-  let data = req.body;
-  if (!data || (typeof data === 'object' && Object.keys(data).length === 0)) {
-    if (typeof req.body === 'string') try { data = JSON.parse(req.body); } catch(e) {}
-  }
-  const payloadData = { ...data, ...req.query };
-  let { phone, name, summary, link } = payloadData;
-
-  // 2. CRITICAL DEBUG LOG
-  // This will show up in your Vercel Logs. Look for this line!
-  console.log("🔍 DIAGNOSTIC REPORT:");
-  console.log(`- Phone Provided? [${phone ? "YES" : "NO"}] -> Value: ${phone}`);
-  console.log(`- Name Provided?  [${name ? "YES" : "NO"}] -> Value: ${name}`);
-  console.log(`- Summary Provided? [${summary ? "YES" : "NO"}] -> Value: ${summary}`);
-  console.log(`- Link Provided?    [${link ? "YES" : "NO"}] -> Value: ${link}`);
-
-  // 3. Fallbacks (To prevent crashing)
-  if (!name) name = "Valued Customer"; // Fallback if AI forgets name
-  if (!summary) summary = "Here are the details from our call."; // Fallback if AI forgets summary
-  if (!link) link = "https://alat.ng"; // Fallback link
-
-  // 4. Phone Fixer
-  if (phone) {
-    phone = phone.replace(/[^0-9]/g, '');
-    if (phone.startsWith('0')) phone = '234' + phone.substring(1);
+  // 1. Allow only POST
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  // 5. Final Gatekeeper
-  if (!phone) {
-    console.error("❌ FAILURE: Phone number is completely missing.");
-    return res.status(400).json({ error: 'Phone is missing', debug: payloadData });
-  }
-
-  // 6. Send to Meta
   try {
-    const TEMPLATE_NAME = "call_follow_up_final"; // Check this name!
-    // 1. CAPTURE & CLEAN THE SUMMARY (Handle "summary" or "message")
-    let rawSummary = summary || message || "No summary provided."; 
-    // Ensure it's a string and clean newlines
-    const cleanSummary = String(rawSummary).replace(/[\r\n]+/g, ' ').trim().substring(0, 1000); // Limit length to be safe
-
-    // 2. CLEAN THE LINK
-    let rawLink = link || "https://www.alat.ng";
-    const cleanLink = String(rawLink).replace(/[\r\n]+/g, '').trim();
+    // 2. UNIVERSAL PARSER (Handles JSON or String body)
+    let data = req.body;
+    if (typeof data === 'string') {
+      try { data = JSON.parse(data); } catch (e) { console.error("Parse error:", e); }
+    }
     
+    // Combine body and query params to be safe
+    const payloadData = { ...data, ...req.query };
+
+    // 3. EXTRACT VARIABLES (Log them to see what arrives)
+    console.log("👉 Incoming Payload:", JSON.stringify(payloadData, null, 2));
+
+    const { phone, name, message, summary, link } = payloadData;
+
+    // 4. VALIDATION
+    if (!phone) {
+      return res.status(400).json({ error: 'Missing phone number' });
+    }
+
+    // 5. PREPARE DATA (Fallback logic to prevent crashes)
+    // Accept either 'summary' OR 'message' from the tool
+    const rawSummary = summary || message || "No summary provided.";
+    const cleanSummary = String(rawSummary).replace(/[\r\n]+/g, ' ').trim().substring(0, 1000);
+    
+    const cleanName = name || "Valued Customer";
+    const cleanLink = link || "https://www.alat.ng";
+    const templateName = "call_follow_up"; // Ensure this matches your Meta Template Name exactly
+
+    // 6. SEND TO META
+    const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
+    const HEADERS = { 
+      'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 
+      'Content-Type': 'application/json' 
+    };
+
     const metaPayload = {
       messaging_product: "whatsapp",
       to: phone,
       type: "template",
       template: {
-        name: TEMPLATE_NAME, 
-        language: { code: "en" }, 
+        name: templateName,
+        language: { code: "en_US" }, // Change to "en_GB" if your template is UK English
         components: [
           {
             type: "body",
             parameters: [
-              parameters: [
               // {{1}} Name
-              { type: "text", text: name || "Valued Customer" },
+              { type: "text", text: cleanName },
               
-              // {{2}} Summary (The fixed variable)
+              // {{2}} Summary
               { type: "text", text: cleanSummary },
               
               // {{3}} Link
               { type: "text", text: cleanLink }
-            ]
             ]
           }
         ]
       }
     };
 
-    const response = await fetch(`https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`, { 
+    console.log("📤 Sending to Meta:", JSON.stringify(metaPayload, null, 2));
+
+    const response = await fetch(WHATSAPP_URL, { 
       method: 'POST', 
-      headers: { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' }, 
+      headers: HEADERS, 
       body: JSON.stringify(metaPayload) 
     });
 
     const metaData = await response.json();
 
     if (!response.ok) {
-      console.error("❌ Meta Error:", JSON.stringify(metaData));
-      return res.status(500).json({ error: 'Meta Error', details: metaData });
+      console.error("❌ Meta API Error:", JSON.stringify(metaData));
+      return res.status(500).json({ error: 'Meta API Failed', details: metaData });
     }
 
-    return res.status(200).json({ status: 'Success' });
+    console.log("✅ Success:", metaData);
+    return res.status(200).json({ status: 'Sent', id: metaData.messages?.[0]?.id });
 
   } catch (error) {
-    console.error("System Error:", error);
-    return res.status(500).json({ error: error.message });
+    console.error("🔥 CRITICAL SERVER ERROR:", error);
+    return res.status(500).json({ error: 'Internal Server Error', message: error.message });
   }
 }
