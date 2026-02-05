@@ -39,7 +39,7 @@ export default async function handler(req, res) {
 
     // 2. CHANGE THIS TO "en" (Matches "English" in your screenshot)
     const languageCode = "en";
-
+ 
     // 6. SEND TO META
     const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
     const HEADERS = { 
