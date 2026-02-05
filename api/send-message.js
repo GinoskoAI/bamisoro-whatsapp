@@ -34,10 +34,11 @@ export default async function handler(req, res) {
     
     const cleanName = name || "Valued Customer";
     const cleanLink = link || "https://www.alat.ng";
-   const templateName = "call_follow_up_final"; // Ensure this matches EXACTLY
-    
-    // Keep this as en_US
-    const languageCode = "en_US";
+   // 1. Name is correct (confirmed by screenshot)
+    const templateName = "call_follow_up_final"; 
+
+    // 2. CHANGE THIS TO "en" (Matches "English" in your screenshot)
+    const languageCode = "en";
 
     // 6. SEND TO META
     const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
