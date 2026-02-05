@@ -219,6 +219,79 @@ C. The "Security Warden" (Urgent/Fraud)
             await supabaseRequest(`user_profiles?phone=eq.${senderPhone}`, 'PATCH', { summary: newSummary });
           }
 
+// ... inside api/webhook.js ...
+import { createTicket, getTicketStatus, updateTicket } from './utils/freshdesk.js';
+
+// ... inside handler ...
+
+const GEMINI_TOOLS = [
+  {
+    function_declarations: [
+      {
+        name: "log_complaint",
+        description: "Creates a support ticket. Use this ONLY after you have asked the user for their Name and Email (if not already known).",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            subject: { type: "STRING", description: "Short title of issue." },
+            details: { type: "STRING", description: "Full details of the complaint." },
+            user_email: { type: "STRING", description: "The user's email address." },
+            user_name: { type: "STRING", description: "The user's full name." }
+          },
+          required: ["subject", "details"]
+        }
+      },
+      {
+        name: "check_ticket_status",
+        description: "Checks the status of the user's recent support tickets.",
+        parameters: { type: "OBJECT", properties: {} } // No params needed, we use phone number
+      },
+      {
+        name: "escalate_ticket",
+        description: "Escalates an existing ticket or adds an update/complaint to it.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            ticket_id: { type: "NUMBER", description: "The ID of the ticket to update." },
+            update_text: { type: "STRING", description: "The new information or complaint details." },
+            is_urgent: { type: "BOOLEAN", description: "Set to true if user is angry or demands escalation." }
+          },
+          required: ["ticket_id", "update_text"]
+        }
+      }
+    ]
+  }
+];
+
+// ... Inside the functionCall logic block ...
+
+if (functionCall) {
+  const args = functionCall.args;
+  
+  // 1. LOG COMPLAINT
+  if (functionCall.name === "log_complaint") {
+     // Check if email was captured. If not, Gemini should have asked first.
+     const ticketId = await createTicket(senderPhone, args.subject, args.details, args.user_email, args.user_name);
+     const resultText = ticketId ? `Ticket #${ticketId} created successfully.` : "Failed to create ticket.";
+     
+     // Send result back to Gemini
+     // ... (followUpReq logic from previous steps) ...
+  }
+
+  // 2. CHECK STATUS
+  if (functionCall.name === "check_ticket_status") {
+     const statusSummary = await getTicketStatus(senderPhone);
+     // Send 'statusSummary' back to Gemini so it can say: "I found 2 tickets. Ticket #101 is Open..."
+  }
+
+  // 3. ESCALATE TICKET
+  if (functionCall.name === "escalate_ticket") {
+     await updateTicket(args.ticket_id, args.update_text, args.is_urgent);
+     // Send success message back
+  }
+}
+
+          
           // F. SEND TO WHATSAPP
           const aiReply = aiOutput.response || { type: "text", body: "..." };
           const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
