@@ -53,7 +53,7 @@ export default async function handler(req, res) {
       type: "template",
       template: {
         name: templateName,
-        language: { code: "en_US" }, // Change to "en_GB" if your template is UK English
+        language: { code: "en" }, // Change to "en_GB" if your template is UK English
         components: [
           {
             type: "body",
