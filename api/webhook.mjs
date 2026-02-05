@@ -1,6 +1,6 @@
 // api/webhook.js
 // VERSION: "Muyi" Next-Gen - gemini-3-flash-preview, Enthusiastic Emojis, & Smart Buttons
-
+import { createTicket, getTicketStatus, updateTicket } from './utils/freshdesk.mjs';
 export default async function handler(req, res) {
   // ============================================================
   // 1. HELPER: Talk to Supabase
