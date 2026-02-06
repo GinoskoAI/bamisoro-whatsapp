@@ -1,5 +1,5 @@
 // api/webhook.mjs
-// VERSION: FINAL FIXED (Double-check the end of the file!)
+// VERSION: FINAL FIXED - Syntax Error Removed
 
 import { createTicket, getTicketStatus, updateTicket } from './utils/freshdesk.mjs';
 
