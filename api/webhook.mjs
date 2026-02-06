@@ -1,35 +1,36 @@
-// api/webhook.js
-// VERSION: "Muyi" Next-Gen - gemini-3-flash-preview, Enthusiastic Emojis, & Smart Buttons
-const { createTicket, getTicketStatus, updateTicket } = require('./utils/freshdesk.js');
-module.exports = async function handler(req, res) {
-  // ============================================================
-  // 1. HELPER: Talk to Supabase
-  // ============================================================
-  async function supabaseRequest(endpoint, method, body = null) {
-    const url = `${process.env.SUPABASE_URL}/rest/v1/${endpoint}`;
-    const headers = {
-      'apikey': process.env.SUPABASE_KEY,
-      'Authorization': `Bearer ${process.env.SUPABASE_KEY}`,
-      'Content-Type': 'application/json',
-      'Prefer': 'return=minimal'
-    };
-    if (method === 'GET') headers['Prefer'] = 'return=representation';
-    
-    const options = { method, headers };
-    if (body) options.body = JSON.stringify(body);
-    try {
-      const response = await fetch(url, options);
-      if (response.status === 204) return null;
-      const text = await response.text();
-      return text ? JSON.parse(text) : null;
-    } catch (err) { return null; }
-  }
+// api/webhook.mjs
+// VERSION: "Muyi" Next-Gen - Fixed for .mjs & Tools
 
-  // ============================================================
-  // 2. CONFIGURATION: The "Muyi" System Persona
-  // ============================================================
-  const SYSTEM_PROMPT = `
-  Role & Persona
+import { createTicket, getTicketStatus, updateTicket } from './utils/freshdesk.mjs';
+
+// ============================================================
+// 1. HELPER: Talk to Supabase
+// ============================================================
+async function supabaseRequest(endpoint, method, body = null) {
+  const url = `${process.env.SUPABASE_URL}/rest/v1/${endpoint}`;
+  const headers = {
+    'apikey': process.env.SUPABASE_KEY,
+    'Authorization': `Bearer ${process.env.SUPABASE_KEY}`,
+    'Content-Type': 'application/json',
+    'Prefer': 'return=minimal'
+  };
+  if (method === 'GET') headers['Prefer'] = 'return=representation';
+  
+  const options = { method, headers };
+  if (body) options.body = JSON.stringify(body);
+  try {
+    const response = await fetch(url, options);
+    if (response.status === 204) return null;
+    const text = await response.text();
+    return text ? JSON.parse(text) : null;
+  } catch (err) { return null; }
+}
+
+// ============================================================
+// 2. CONFIGURATION: The "Muyi" System Persona
+// ============================================================
+const SYSTEM_PROMPT = `
+ Role & Persona
 You are ALAT Buddy, the official WhatsApp AI Agent for Wema Bank. Your goal is to provide seamless, instant support for ALAT and Wema Bank customers. You are professional, empathetic, and deeply familiar with Nigerian banking nuances, including local phrasing and slang (e.g., "abeg," "I don try tire," "money still hang"). No need to greet the user good afternoon again after a conversation has started. Try to be professional, official but creative in your responses. 
 Core Operational Capabilities
 1.	Complaint Classification: Categorize every message according to the Wema Bank Classification Schema (e.g., Failed Transfer, Failed POS Transaction, Account Restrictions).
@@ -143,15 +144,62 @@ Bot: (Calls check_ticket_status) -> "Ticket #2045 is currently Resolved."
   MEMORY INSTRUCTIONS:
   - Add new user details to "memory_update".
   - Use "SYSTEM CONTEXT" to be smart (e.g., "Good Afternoon! ☀️").
-  `;
+`;
 
-  // 3. Verify Webhook (GET)
+// ============================================================
+// 3. TOOLS DEFINITION
+// ============================================================
+const GEMINI_TOOLS = [
+  {
+    function_declarations: [
+      {
+        name: "log_complaint",
+        description: "Creates a support ticket. Use this ONLY after you have asked the user for their Name and Email (if not already known).",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            subject: { type: "STRING", description: "Short title of issue." },
+            details: { type: "STRING", description: "Full details of the complaint." },
+            user_email: { type: "STRING", description: "The user's email address." },
+            user_name: { type: "STRING", description: "The user's full name." }
+          },
+          required: ["subject", "details"]
+        }
+      },
+      {
+        name: "check_ticket_status",
+        description: "Checks the status of the user's recent support tickets.",
+        parameters: { type: "OBJECT", properties: {} } 
+      },
+      {
+        name: "escalate_ticket",
+        description: "Escalates an existing ticket or adds an update/complaint to it.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            ticket_id: { type: "NUMBER", description: "The ID of the ticket to update." },
+            update_text: { type: "STRING", description: "The new information or complaint details." },
+            is_urgent: { type: "BOOLEAN", description: "Set to true if user is angry or demands escalation." }
+          },
+          required: ["ticket_id", "update_text"]
+        }
+      }
+    ]
+  }
+];
+
+// ============================================================
+// 4. MAIN HANDLER
+// ============================================================
+export default async function handler(req, res) {
+  
+  // Verify Webhook (GET)
   if (req.method === 'GET') {
     if (req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === process.env.WEBHOOK_VERIFY_TOKEN) return res.status(200).send(req.query['hub.challenge']);
     return res.status(403).json({ error: 'Verification failed.' });
   }
 
-  // 4. Handle Messages (POST)
+  // Handle Messages (POST)
   if (req.method === 'POST') {
     const body = req.body;
     if (body.object && body.entry && body.entry[0].changes && body.entry[0].changes[0].value.messages) {
@@ -160,7 +208,6 @@ Bot: (Calls check_ticket_status) -> "Ticket #2045 is currently Resolved."
       const senderPhone = message.from;
       const whatsappName = change.contacts?.[0]?.profile?.name || "Unknown";
       
-      // --- CAPTURE SYSTEM VARIABLES ---
       const now = new Date();
       const timeString = now.toLocaleTimeString('en-NG', { timeZone: 'Africa/Lagos', hour: '2-digit', minute: '2-digit' });
       const dateString = now.toLocaleDateString('en-NG', { timeZone: 'Africa/Lagos', weekday: 'long', month: 'long', day: 'numeric' });
@@ -214,114 +261,78 @@ Bot: (Calls check_ticket_status) -> "Ticket #2045 is currently Resolved."
           `;
           const fullConversation = [...chatHistory, { role: "user", parts: [{ text: contextString }] }];
 
-          // D. ASK GEMINI (Updated to 3.0 Flash Preview as requested)
-          // Note: Ensure your API Key has access to this specific preview model
-          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${process.env.GEMINI_API_KEY}`;
+          // D. ASK GEMINI (Round 1)
+          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
           
-          const geminiResponse = await fetch(geminiUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: fullConversation,
-              system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-              generationConfig: { responseMimeType: "application/json" }
-            })
+          let apiBody = {
+            contents: fullConversation,
+            tools: GEMINI_TOOLS, // Attach tools here
+            system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
+            generationConfig: { responseMimeType: "application/json" }
+          };
+
+          let geminiResponse = await fetch(geminiUrl, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(apiBody)
           });
 
-          if (!geminiResponse.ok) {
-             const errorText = await geminiResponse.text();
-             console.error("Gemini API Error:", errorText);
-             // Fallback if 3.0 fails/doesn't exist yet for this key
-             throw new Error("Gemini Model Error");
+          let geminiData = await geminiResponse.json();
+          let candidate = geminiData.candidates?.[0]?.content?.parts?.[0];
+          
+          // E. CHECK FOR TOOL USE (Function Call)
+          // If Gemini wants to use a tool, it might NOT be valid JSON yet.
+          if (candidate?.functionCall) {
+              const call = candidate.functionCall;
+              const args = call.args;
+              let toolResultText = "Tool execution failed.";
+
+              // 1. EXECUTE THE TOOL
+              if (call.name === "log_complaint") {
+                 const tID = await createTicket(senderPhone, args.subject, args.details, args.user_email, args.user_name);
+                 toolResultText = tID ? `SUCCESS: Ticket #${tID} created.` : "ERROR: Failed to create ticket.";
+              }
+              else if (call.name === "check_ticket_status") {
+                 toolResultText = await getTicketStatus(senderPhone);
+              }
+              else if (call.name === "escalate_ticket") {
+                 toolResultText = await updateTicket(args.ticket_id, args.update_text, args.is_urgent);
+              }
+
+              // 2. SEND RESULT BACK TO GEMINI (Round 2)
+              // We append the function call + the function response to the conversation
+              const followUpContents = [
+                  ...fullConversation,
+                  { role: "model", parts: [{ functionCall: call }] },
+                  { role: "function", parts: [{ functionResponse: { name: call.name, response: { result: toolResultText } } }] }
+              ];
+
+              // Ask Gemini again for the final JSON reply
+              apiBody.contents = followUpContents;
+              geminiResponse = await fetch(geminiUrl, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(apiBody)
+              });
+              geminiData = await geminiResponse.json();
           }
 
-          const geminiData = await geminiResponse.json();
+          // F. PARSE FINAL RESPONSE
           let aiRawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
           let aiOutput;
-          try { aiOutput = JSON.parse(aiRawText.replace(/```json|```/g, "").trim()); } 
-          catch (e) { aiOutput = { response: { type: "text", body: "I'm having a moment! 😅 Could you repeat that?" } }; }
+          try { 
+              aiOutput = JSON.parse(aiRawText.replace(/```json|```/g, "").trim()); 
+          } catch (e) { 
+              // Fallback if Gemini speaks plain text instead of JSON
+              aiOutput = { response: { type: "text", body: aiRawText || "I'm having a moment! 😅" } }; 
+          }
 
-          // E. UPDATE MEMORY
+          // G. UPDATE MEMORY
           if (aiOutput.memory_update) {
             const oldSummary = currentProfile.summary || "";
             const newSummary = (oldSummary + "\n- " + aiOutput.memory_update).slice(-3000); 
             await supabaseRequest(`user_profiles?phone=eq.${senderPhone}`, 'PATCH', { summary: newSummary });
           }
-
-// ... inside api/webhook.js ...
-import { createTicket, getTicketStatus, updateTicket } from './utils/freshdesk.js';
-
-// ... inside handler ...
-
-const GEMINI_TOOLS = [
-  {
-    function_declarations: [
-      {
-        name: "log_complaint",
-        description: "Creates a support ticket. Use this ONLY after you have asked the user for their Name and Email (if not already known).",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            subject: { type: "STRING", description: "Short title of issue." },
-            details: { type: "STRING", description: "Full details of the complaint." },
-            user_email: { type: "STRING", description: "The user's email address." },
-            user_name: { type: "STRING", description: "The user's full name." }
-          },
-          required: ["subject", "details"]
-        }
-      },
-      {
-        name: "check_ticket_status",
-        description: "Checks the status of the user's recent support tickets.",
-        parameters: { type: "OBJECT", properties: {} } // No params needed, we use phone number
-      },
-      {
-        name: "escalate_ticket",
-        description: "Escalates an existing ticket or adds an update/complaint to it.",
-        parameters: {
-          type: "OBJECT",
-          properties: {
-            ticket_id: { type: "NUMBER", description: "The ID of the ticket to update." },
-            update_text: { type: "STRING", description: "The new information or complaint details." },
-            is_urgent: { type: "BOOLEAN", description: "Set to true if user is angry or demands escalation." }
-          },
-          required: ["ticket_id", "update_text"]
-        }
-      }
-    ]
-  }
-];
-
-// ... Inside the functionCall logic block ...
-
-if (functionCall) {
-  const args = functionCall.args;
-  
-  // 1. LOG COMPLAINT
-  if (functionCall.name === "log_complaint") {
-     // Check if email was captured. If not, Gemini should have asked first.
-     const ticketId = await createTicket(senderPhone, args.subject, args.details, args.user_email, args.user_name);
-     const resultText = ticketId ? `Ticket #${ticketId} created successfully.` : "Failed to create ticket.";
-     
-     // Send result back to Gemini
-     // ... (followUpReq logic from previous steps) ...
-  }
-
-  // 2. CHECK STATUS
-  if (functionCall.name === "check_ticket_status") {
-     const statusSummary = await getTicketStatus(senderPhone);
-     // Send 'statusSummary' back to Gemini so it can say: "I found 2 tickets. Ticket #101 is Open..."
-  }
-
-  // 3. ESCALATE TICKET
-  if (functionCall.name === "escalate_ticket") {
-     await updateTicket(args.ticket_id, args.update_text, args.is_urgent);
-     // Send success message back
-  }
-}
-
           
-          // F. SEND TO WHATSAPP
+          // H. SEND TO WHATSAPP
           const aiReply = aiOutput.response || { type: "text", body: "..." };
           const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
           const HEADERS = { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' };
@@ -332,25 +343,18 @@ if (functionCall) {
             payload = { messaging_product: "whatsapp", to: senderPhone, text: { body: aiReply.body } };
           } 
           else if (aiReply.type === "button") {
-             // BUTTON FIX: Slice to 3, Truncate to 20 chars
              const safeOptions = (aiReply.options || []).slice(0, 3);
              const buttons = safeOptions.map((opt, i) => ({ 
                type: "reply", 
                reply: { id: `btn_${i}`, title: opt.substring(0, 20) } 
              }));
-             
              payload = { 
-               messaging_product: "whatsapp", 
-               to: senderPhone, 
-               type: "interactive", 
+               messaging_product: "whatsapp", to: senderPhone, type: "interactive", 
                interactive: { type: "button", body: { text: aiReply.body }, action: { buttons: buttons } } 
              };
           }
           else if (aiReply.type === "image") {
             payload = { messaging_product: "whatsapp", to: senderPhone, type: "image", image: { link: aiReply.link, caption: aiReply.caption || "" } };
-          }
-          else if (aiReply.type === "video") {
-            payload = { messaging_product: "whatsapp", to: senderPhone, type: "video", video: { link: aiReply.link, caption: aiReply.caption || "" } };
           }
 
           if (payload.messaging_product) {
