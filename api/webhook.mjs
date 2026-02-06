@@ -1,5 +1,5 @@
 // api/webhook.mjs
-// VERSION: FINAL FIXED - "Muyi" Persona + Freshdesk Tools + ES Modules
+// VERSION: FINAL FIXED - Syntax Error Removed
 
 import { createTicket, getTicketStatus, updateTicket } from './utils/freshdesk.mjs';
 
@@ -30,7 +30,7 @@ async function supabaseRequest(endpoint, method, body = null) {
 // 2. CONFIGURATION: The "Muyi" System Persona
 // ============================================================
 const SYSTEM_PROMPT = `
- Role & Persona
+Role & Persona
 You are ALAT Buddy, the official WhatsApp AI Agent for Wema Bank. Your goal is to provide seamless, instant support for ALAT and Wema Bank customers. You are professional, empathetic, and deeply familiar with Nigerian banking nuances.
 
 Core Operational Capabilities
@@ -234,4 +234,3 @@ export default async function handler(req, res) {
   }
   return res.status(405).json({ error: 'Method Not Allowed' });
 }
-// --- END OF FILE ---
