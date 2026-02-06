@@ -7,7 +7,15 @@ const getHeaders = () => ({
   'Content-Type': 'application/json'
 });
 
-async function createOrUpdateContact(phone, name, email) {
+// 1. MANAGE CRM CONTACT (Internal Helper)
+// Finds a user by phone. If they exist, updates them. If not, creates them.
+export async function createOrUpdateContact(phone, name, email) {
+  if (!FRESHDESK_DOMAIN || !FRESHDESK_API_KEY) {
+      console.error("Missing Freshdesk Config");
+      return null;
+  }
+
+  // A. Search for existing contact by Phone
   const searchUrl = `https://${FRESHDESK_DOMAIN}/api/v2/contacts?phone=${encodeURIComponent(phone)}`;
   
   try {
@@ -15,9 +23,11 @@ async function createOrUpdateContact(phone, name, email) {
     const searchData = await searchRes.json();
 
     if (searchData.length > 0) {
+      // --- CONTACT EXISTS: UPDATE ---
       const contact = searchData[0];
       const contactId = contact.id;
       
+      // Update only if we have new info
       let updateData = {};
       if (name && (!contact.name || contact.name === "WhatsApp User")) updateData.name = name;
       if (email && (!contact.email || contact.email !== email)) updateData.email = email;
@@ -32,13 +42,14 @@ async function createOrUpdateContact(phone, name, email) {
       return contactId;
 
     } else {
+      // --- NEW CONTACT: CREATE ---
       const createRes = await fetch(`https://${FRESHDESK_DOMAIN}/api/v2/contacts`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({ 
           name: name || "WhatsApp User", 
           phone: phone, 
-          email: email,
+          email: email, 
           unique_external_id: phone 
         })
       });
@@ -53,67 +64,45 @@ async function createOrUpdateContact(phone, name, email) {
   }
 }
 
-async function createTicket(userPhone, subject, description, email, name) {
+// 2. CREATE TICKET
+export async function createTicket(userPhone, subject, description, email, name) {
+  // Ensure CRM record is ready first
   const contactId = await createOrUpdateContact(userPhone, name, email);
   if (!contactId) return null;
 
   const url = `https://${FRESHDESK_DOMAIN}/api/v2/tickets`;
   const ticketData = {
-    description: `${description} \n\n[Source: WhatsApp]`,
+    description: `${description} \n\n[Source: WhatsApp Bot]`,
     subject: subject,
-    priority: 2,
-    status: 2,
-    source: 7,
-    requester_id: contactId
+    priority: 2, // Medium
+    status: 2,   // Open
+    source: 7,   // Chat
+    requester_id: contactId 
   };
 
-  const response = await fetch(url, { method: 'POST', headers: getHeaders(), body: JSON.stringify(ticketData) });
-  if (response.ok) {
-      const data = await response.json();
-      return data.id;
-  }
-  return null;
+  try {
+      const response = await fetch(url, { method: 'POST', headers: getHeaders(), body: JSON.stringify(ticketData) });
+      if (response.ok) {
+          const data = await response.json();
+          return data.id;
+      }
+      return null;
+  } catch (e) { return null; }
 }
 
-async function getTicketStatus(userPhone) {
+// 3. CHECK TICKET STATUS
+export async function getTicketStatus(userPhone) {
   const contactId = await createOrUpdateContact(userPhone);
-  if (!contactId) return "I couldn't find a profile for your phone number.";
+  if (!contactId) return "I couldn't find a support profile for your phone number.";
 
   const url = `https://${FRESHDESK_DOMAIN}/api/v2/tickets?requester_id=${contactId}&include=stats&order_by=created_at&order_type=desc`;
-  const response = await fetch(url, { headers: getHeaders() });
-  const tickets = await response.json();
+  
+  try {
+      const response = await fetch(url, { headers: getHeaders() });
+      const tickets = await response.json();
 
-  if (!tickets || tickets.length === 0) return "You have no open support tickets.";
+      if (!tickets || tickets.length === 0) return "You have no open support tickets at the moment.";
 
-  return tickets.slice(0, 3).map(t => 
-    `🎫 *Ticket #${t.id}*: ${t.subject} (Status: ${getStatusName(t.status)})`
-  ).join("\n");
-}
-
-async function updateTicket(ticketId, noteText, escalate = false) {
-  const noteUrl = `https://${FRESHDESK_DOMAIN}/api/v2/tickets/${ticketId}/notes`;
-  await fetch(noteUrl, {
-    method: 'POST',
-    headers: getHeaders(),
-    body: JSON.stringify({ body: `[User Update]: ${noteText}`, private: false })
-  });
-
-  if (escalate) {
-     const updateUrl = `https://${FRESHDESK_DOMAIN}/api/v2/tickets/${ticketId}`;
-     await fetch(updateUrl, {
-        method: 'PUT',
-        headers: getHeaders(),
-        body: JSON.stringify({ priority: 4 })
-     });
-     return `Ticket #${ticketId} has been escalated.`;
-  }
-  return `Update added to Ticket #${ticketId}.`;
-}
-
-function getStatusName(code) {
-    const statuses = { 2: "Open", 3: "Pending", 4: "Resolved", 5: "Closed" };
-    return statuses[code] || "Processing";
-}
-
-// ⚠️ THIS IS THE KEY CHANGE FOR COMMONJS
-module.exports = { createOrUpdateContact, createTicket, getTicketStatus, updateTicket };
+      // Format the last 3 tickets nicely
+      return tickets.slice(0, 3).map(t => 
+        `🎫 *Ticket #${
