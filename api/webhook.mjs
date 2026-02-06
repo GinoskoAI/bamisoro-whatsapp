@@ -144,7 +144,7 @@ Bot: (Calls check_ticket_status) -> "Ticket #2045 is currently Resolved."
   MEMORY INSTRUCTIONS:
   - Add new user details to "memory_update".
   - Use "SYSTEM CONTEXT" to be smart (e.g., "Good Afternoon! ☀️").
-`;
+;
 
 // ============================================================
 // 3. TOOLS DEFINITION
