@@ -1,108 +1,124 @@
 const FRESHDESK_DOMAIN = process.env.FRESHDESK_DOMAIN;
 const FRESHDESK_API_KEY = process.env.FRESHDESK_API_KEY;
 
-// Helper for Auth Headers
-const getHeaders = () => ({
-  'Authorization': `Basic ${Buffer.from(`${FRESHDESK_API_KEY}:X`).toString('base64')}`,
-  'Content-Type': 'application/json'
-});
+/* =========================
+   HELPERS
+========================= */
+function authHeader() {
+  return {
+    Authorization:
+      'Basic ' +
+      Buffer.from(`${FRESHDESK_API_KEY}:X`).toString('base64'),
+    'Content-Type': 'application/json'
+  };
+}
 
-// 1. MANAGE CRM CONTACT (Internal Helper)
-// Finds a user by phone. If they exist, updates them. If not, creates them.
-export async function createOrUpdateContact(phone, name, email) {
-  if (!FRESHDESK_DOMAIN || !FRESHDESK_API_KEY) {
-      console.error("Missing Freshdesk Config");
-      return null;
-  }
-
-  // A. Search for existing contact by Phone
-  const searchUrl = `https://${FRESHDESK_DOMAIN}/api/v2/contacts?phone=${encodeURIComponent(phone)}`;
-  
+/* =========================
+   CREATE TICKET
+========================= */
+export async function createTicket(
+  phone,
+  subject,
+  description,
+  email,
+  name
+) {
   try {
-    const searchRes = await fetch(searchUrl, { headers: getHeaders() });
-    const searchData = await searchRes.json();
-
-    if (searchData.length > 0) {
-      // --- CONTACT EXISTS: UPDATE ---
-      const contact = searchData[0];
-      const contactId = contact.id;
-      
-      // Update only if we have new info
-      let updateData = {};
-      if (name && (!contact.name || contact.name === "WhatsApp User")) updateData.name = name;
-      if (email && (!contact.email || contact.email !== email)) updateData.email = email;
-
-      if (Object.keys(updateData).length > 0) {
-        await fetch(`https://${FRESHDESK_DOMAIN}/api/v2/contacts/${contactId}`, {
-          method: 'PUT',
-          headers: getHeaders(),
-          body: JSON.stringify(updateData)
-        });
+    const payload = {
+      subject,
+      description,
+      email: email || `whatsapp_${phone}@example.com`,
+      priority: 1,
+      status: 2,
+      custom_fields: {
+        cf_whatsapp_number: phone
       }
-      return contactId;
+    };
 
-    } else {
-      // --- NEW CONTACT: CREATE ---
-      const createRes = await fetch(`https://${FRESHDESK_DOMAIN}/api/v2/contacts`, {
+    if (name) payload.name = name;
+
+    const res = await fetch(
+      `https://${FRESHDESK_DOMAIN}/api/v2/tickets`,
+      {
         method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ 
-          name: name || "WhatsApp User", 
-          phone: phone, 
-          email: email, 
-          unique_external_id: phone 
-        })
-      });
-      
-      if (!createRes.ok) return null;
-      const createData = await createRes.json();
-      return createData.id;
+        headers: authHeader(),
+        body: JSON.stringify(payload)
+      }
+    );
+
+    if (!res.ok) {
+      console.error('Freshdesk createTicket failed:', await res.text());
+      return null;
     }
-  } catch (e) {
-    console.error("Freshdesk Contact Error:", e);
+
+    const data = await res.json();
+    return data.id;
+  } catch (err) {
+    console.error('createTicket error:', err);
     return null;
   }
 }
 
-// 2. CREATE TICKET
-export async function createTicket(userPhone, subject, description, email, name) {
-  // Ensure CRM record is ready first
-  const contactId = await createOrUpdateContact(userPhone, name, email);
-  if (!contactId) return null;
-
-  const url = `https://${FRESHDESK_DOMAIN}/api/v2/tickets`;
-  const ticketData = {
-    description: `${description} \n\n[Source: WhatsApp Bot]`,
-    subject: subject,
-    priority: 2, // Medium
-    status: 2,   // Open
-    source: 7,   // Chat
-    requester_id: contactId 
-  };
-
+/* =========================
+   GET TICKET STATUS
+========================= */
+export async function getTicketStatus(phone) {
   try {
-      const response = await fetch(url, { method: 'POST', headers: getHeaders(), body: JSON.stringify(ticketData) });
-      if (response.ok) {
-          const data = await response.json();
-          return data.id;
-      }
-      return null;
-  } catch (e) { return null; }
+    const searchUrl = `https://${FRESHDESK_DOMAIN}/api/v2/search/tickets?query="cf_whatsapp_number:'${phone}'"`;
+
+    const res = await fetch(searchUrl, {
+      method: 'GET',
+      headers: authHeader()
+    });
+
+    if (!res.ok) {
+      console.error('Freshdesk getTicketStatus failed:', await res.text());
+      return 'Unable to fetch ticket status at the moment.';
+    }
+
+    const data = await res.json();
+    const ticket = data?.results?.[0];
+
+    if (!ticket) return 'No active ticket found for your number.';
+
+    return `Your ticket (#${ticket.id}) is currently ${ticket.status}.`;
+  } catch (err) {
+    console.error('getTicketStatus error:', err);
+    return 'Error retrieving ticket status.';
+  }
 }
 
-// 3. CHECK TICKET STATUS
-export async function getTicketStatus(userPhone) {
-  const contactId = await createOrUpdateContact(userPhone);
-  if (!contactId) return "I couldn't find a support profile for your phone number.";
-
-  const url = `https://${FRESHDESK_DOMAIN}/api/v2/tickets?requester_id=${contactId}&include=stats&order_by=created_at&order_type=desc`;
-  
+/* =========================
+   UPDATE / ESCALATE TICKET
+========================= */
+export async function updateTicket(ticketId, note, urgent = false) {
   try {
-      const response = await fetch(url, { headers: getHeaders() });
-      const tickets = await response.json();
+    const payload = {
+      note,
+      private: false
+    };
 
-      if (!tickets || tickets.length === 0) return "You have no open support tickets at the moment.";
+    if (urgent) {
+      payload.priority = 4;
+    }
 
-      // Format the last 3 tickets nicely
-      return tickets.slice(0, 3).map(t => 
-        `🎫 *Ticket #${
+    const res = await fetch(
+      `https://${FRESHDESK_DOMAIN}/api/v2/tickets/${ticketId}/notes`,
+      {
+        method: 'POST',
+        headers: authHeader(),
+        body: JSON.stringify(payload)
+      }
+    );
+
+    if (!res.ok) {
+      console.error('Freshdesk updateTicket failed:', await res.text());
+      return 'Failed to update ticket.';
+    }
+
+    return 'Ticket updated successfully.';
+  } catch (err) {
+    console.error('updateTicket error:', err);
+    return 'Error updating ticket.';
+  }
+}
