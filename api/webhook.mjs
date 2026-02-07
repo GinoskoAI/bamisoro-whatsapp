@@ -1,5 +1,5 @@
 // api/webhook.mjs
-// VERSION: ROBUST "MUYI" - Aggressive JSON & Emoji Enforcer
+// VERSION: LITE & STABLE - Gemini 2.5 Flash (Text-First Mode)
 
 import { createTicket, getTicketStatus, updateTicket } from './utils/freshdesk.mjs';
 
@@ -20,35 +20,34 @@ async function supabaseRequest(endpoint, method, body = null) {
   if (body) options.body = JSON.stringify(body);
   try {
     const response = await fetch(url, options);
-    if (response.status === 204) return null;
+    if (response.status === 204) return true; 
     const text = await response.text();
     return text ? JSON.parse(text) : null;
   } catch (err) { return null; }
 }
 
 // ============================================================
-// 2. CONFIGURATION: The "Muyi" System Persona
+// 2. SYSTEM PROMPT (Simplified for Text-First)
 // ============================================================
 const SYSTEM_PROMPT = `
 Role: ALAT Buddy (Wema Bank AI).
-Tone: Professional but NIGERIAN FRIENDLY. Use emojis (👋, 🚀, ✅, 💳) in EVERY SINGLE MESSAGE.
+Tone: Professional, Nigerian Friendly (use "Abeg", "We dey for you"), and formatted.
 Goal: Support customers & Manage Tickets.
 
-CRITICAL RULES:
-1. **EMOJIS:** You MUST use emojis. If you don't, the system fails.
-2. **JSON ONLY:** Output ONLY valid JSON. Do not add conversational filler like "Here is the JSON".
-3. **SHORT:** Keep text under 300 characters unless explaining a complex process.
+CRITICAL INSTRUCTIONS:
+1. **SPEAK NORMALLY:** Do NOT output JSON. Just write your response as text.
+2. **EMOJIS:** Use emojis (👋, 🚀, ✨) freely in every message.
+3. **BUTTONS:** If you want to show buttons, add them at the very end of your message separated by pipes (|||).
+   Format: "Message text here ||| Button 1 | Button 2 | Button 3"
 
-COMPLAINT PROCESS:
-1. User complains -> Check if you know Name/Email.
-2. If unknown -> Ask: "To help you, I just need your Name and Email please? 📝"
-3. If known -> Call 'log_complaint'.
-4. If angry -> Call 'escalate_ticket'.
+Capabilities:
+1. **Complaint Logging:** Ask for Name/Email first. Then use 'log_complaint'.
+2. **Status Checks:** Use 'check_ticket_status'.
+3. **Escalation:** Use 'escalate_ticket' if user is angry.
 
-OUTPUT FORMAT (Strict JSON):
-{ "response": { "type": "text", "body": "👋 Hi! *Welcome to ALAT*..." }, "memory_update": "User said hi" }
-OR
-{ "response": { "type": "button", "body": "Select an option: 👇", "options": ["Book Demo 📅", "Services 🛠️"] }, "memory_update": "Menu shown" }
+Context:
+- User is Nigerian.
+- "money still hang" = Failed Transfer.
 `;
 
 // ============================================================
@@ -58,17 +57,17 @@ const GEMINI_TOOLS = [{
   function_declarations: [
     {
       name: "log_complaint",
-      description: "Log ticket. Use ONLY after you have the user's Name and Email.",
+      description: "Log ticket. Ask for Name/Email first.",
       parameters: { type: "OBJECT", properties: { subject: {type:"STRING"}, details: {type:"STRING"}, user_email: {type:"STRING"}, user_name: {type:"STRING"} }, required: ["subject", "details"] }
     },
     {
       name: "check_ticket_status",
-      description: "Check status of recent tickets.",
+      description: "Check ticket status.",
       parameters: { type: "OBJECT", properties: {} } 
     },
     {
       name: "escalate_ticket",
-      description: "Escalate a ticket.",
+      description: "Escalate ticket.",
       parameters: { type: "OBJECT", properties: { ticket_id: {type:"NUMBER"}, update_text: {type:"STRING"}, is_urgent: {type:"BOOLEAN"} }, required: ["ticket_id", "update_text"] }
     }
   ]
@@ -107,39 +106,43 @@ export default async function handler(req, res) {
 
           if (!currentProfile.phone) {
             await supabaseRequest('user_profiles', 'POST', { phone: senderPhone, name: whatsappName });
-            currentProfile = { name: whatsappName, summary: "" };
+            currentProfile = { name: whatsappName };
           }
 
-          // Context Building
+          // Get last 8 messages
           const historyData = await supabaseRequest(`messages?user_phone=eq.${senderPhone}&order=id.desc&limit=8&select=role,content`, 'GET') || [];
           const chatHistory = historyData.reverse().map(msg => ({
             role: msg.role === 'assistant' ? 'model' : 'user',
             parts: [{ text: msg.content }]
           }));
 
-          const contextString = `
-            USER: ${currentProfile.name} (${senderPhone})
-            FACTS: ${currentProfile.summary || "None"}
-            INPUT: "${userInput}"
-          `;
+          // B. PREPARE PROMPT
+          const contextString = `USER: ${currentProfile.name} (${senderPhone})\nINPUT: "${userInput}"`;
           const fullConversation = [...chatHistory, { role: "user", parts: [{ text: contextString }] }];
 
-          // B. CALL GEMINI (Round 1)
-          // Using gemini-2.0-flash for stability. Change to 3.0-flash-preview ONLY if necessary.
-          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+          // C. CALL GEMINI (User requested 2.5 Flash)
+          // ⚠️ IF THIS FAILS, SWITCH BACK TO "gemini-2.0-flash" or "gemini-1.5-flash"
+          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
           
           let apiBody = {
             contents: fullConversation,
             tools: GEMINI_TOOLS,
-            system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
-            generationConfig: { responseMimeType: "application/json" }
+            system_instruction: { parts: [{ text: SYSTEM_PROMPT }] }
           };
 
           let geminiResponse = await fetch(geminiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(apiBody) });
+          
+          // Check for Model 404 Error
+          if (!geminiResponse.ok) {
+             console.error("Gemini Error:", await geminiResponse.text());
+             // Fallback attempt with 2.0 if 2.5 fails (Optional safety net)
+             // ... logic removed to keep file simple ...
+          }
+
           let geminiData = await geminiResponse.json();
           let candidate = geminiData.candidates?.[0]?.content?.parts?.[0];
           
-          // C. CHECK FOR TOOL USE
+          // D. CHECK FOR TOOL USE
           if (candidate?.functionCall) {
               const call = candidate.functionCall;
               const args = call.args;
@@ -147,13 +150,12 @@ export default async function handler(req, res) {
 
               if (call.name === "log_complaint") {
                  const tID = await createTicket(senderPhone, args.subject, args.details, args.user_email, args.user_name);
-                 toolResultText = tID ? `Ticket #${tID} created successfully!` : "Failed to create ticket.";
+                 toolResultText = tID ? `Ticket #${tID} created.` : "Failed to create ticket.";
               }
               else if (call.name === "check_ticket_status") toolResultText = await getTicketStatus(senderPhone);
               else if (call.name === "escalate_ticket") toolResultText = await updateTicket(args.ticket_id, args.update_text, args.is_urgent);
 
-              // Round 2 (Send result back)
-              // IMPORTANT: We re-send system instructions to force JSON again
+              // Round 2
               const followUpContents = [
                   ...fullConversation,
                   { role: "model", parts: [{ functionCall: call }] },
@@ -164,64 +166,41 @@ export default async function handler(req, res) {
               geminiData = await geminiResponse.json();
           }
 
-          // D. ROBUST JSON PARSING
-          let aiRawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          let aiOutput = {};
-
-          try {
-              // 1. Clean Markdown
-              let cleanText = aiRawText.replace(/```json|```/g, "").trim();
-              // 2. Extract JSON Object
-              const firstBrace = cleanText.indexOf('{');
-              const lastBrace = cleanText.lastIndexOf('}');
-              if (firstBrace !== -1 && lastBrace !== -1) {
-                  cleanText = cleanText.substring(firstBrace, lastBrace + 1);
-                  aiOutput = JSON.parse(cleanText);
-              } else {
-                  throw new Error("No JSON found");
-              }
-          } catch (e) {
-              // FALLBACK: If JSON fails, use the raw text directly. 
-              // This fixes the "..." issue.
-              aiOutput = { response: { type: "text", body: aiRawText || "I'm having a moment! 😅 Please try again." } };
-          }
-
-          // E. HANDLE MISSING RESPONSE KEY
-          // If Gemini sent JSON but forgot the "response" key
-          if (!aiOutput.response && aiOutput.memory_update) {
-             aiOutput.response = { type: "text", body: "✅ Update recorded." };
-          }
-          if (!aiOutput.response) {
-             aiOutput.response = { type: "text", body: aiRawText || "..." };
-          }
-
-          // F. UPDATE MEMORY
-          if (aiOutput.memory_update) {
-            const newSummary = ((currentProfile.summary || "") + "\n" + aiOutput.memory_update).slice(-2000); 
-            await supabaseRequest(`user_profiles?phone=eq.${senderPhone}`, 'PATCH', { summary: newSummary });
-          }
+          // E. PARSE RESPONSE (The "Splitter" Method)
+          let finalAiText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "System Error";
           
-          // G. SEND TO WHATSAPP
-          const aiReply = aiOutput.response;
+          // Check for buttons separator "|||"
+          let messageBody = finalAiText;
+          let buttons = [];
+          
+          if (finalAiText.includes("|||")) {
+             const parts = finalAiText.split("|||");
+             messageBody = parts[0].trim();
+             const buttonPart = parts[1].trim();
+             buttons = buttonPart.split("|").map(b => b.trim()).filter(b => b.length > 0).slice(0, 3);
+          }
+
+          // F. SEND TO WHATSAPP
           const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
           const HEADERS = { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' };
           
           let payload = {};
-          if (aiReply.type === "text") {
-             payload = { messaging_product: "whatsapp", to: senderPhone, text: { body: aiReply.body } };
-          } 
-          else if (aiReply.type === "button") {
-             const buttons = (aiReply.options || ["Menu"]).slice(0, 3).map((opt, i) => ({ 
+
+          if (buttons.length > 0) {
+             const btnObjects = buttons.map((opt, i) => ({ 
                type: "reply", reply: { id: `btn_${i}`, title: opt.substring(0, 20) } 
              }));
-             payload = { messaging_product: "whatsapp", to: senderPhone, type: "interactive", interactive: { type: "button", body: { text: aiReply.body }, action: { buttons: buttons } } };
+             payload = { 
+               messaging_product: "whatsapp", to: senderPhone, type: "interactive", 
+               interactive: { type: "button", body: { text: messageBody }, action: { buttons: btnObjects } } 
+             };
+          } else {
+             payload = { messaging_product: "whatsapp", to: senderPhone, text: { body: messageBody } };
           }
 
           if (payload.messaging_product) {
             await fetch(WHATSAPP_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
-            // Log interaction
-            const logContent = aiReply.type === 'text' ? aiReply.body : `[Sent ${aiReply.type}]`;
-            await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'assistant', content: logContent });
+            await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'assistant', content: messageBody });
             await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'user', content: userInput });
           }
 
