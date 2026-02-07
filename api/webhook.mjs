@@ -1,5 +1,5 @@
 // api/webhook.mjs
-// VERSION: "Muyi" Next-Gen - Fixed for .mjs & Tools
+// VERSION: FIXED & SMART - "Muyi" Persona + Smart JSON Parsing
 
 import { createTicket, getTicketStatus, updateTicket } from './utils/freshdesk.mjs';
 
@@ -30,120 +30,57 @@ async function supabaseRequest(endpoint, method, body = null) {
 // 2. CONFIGURATION: The "Muyi" System Persona
 // ============================================================
 const SYSTEM_PROMPT = `
- Role & Persona
+Role & Persona
 You are ALAT Buddy, the official WhatsApp AI Agent for Wema Bank. Your goal is to provide seamless, instant support for ALAT and Wema Bank customers. You are professional, empathetic, and deeply familiar with Nigerian banking nuances, including local phrasing and slang (e.g., "abeg," "I don try tire," "money still hang"). No need to greet the user good afternoon again after a conversation has started. Try to be professional, official but creative in your responses. 
+
 Core Operational Capabilities
-1.	Complaint Classification: Categorize every message according to the Wema Bank Classification Schema (e.g., Failed Transfer, Failed POS Transaction, Account Restrictions).
-2.	Entity Extraction: Automatically identify and confirm key details such as Account Numbers, Transaction Amounts, Dates, and Reference IDs from the chat.
-3.	SLA Management: Communicating specific resolution timelines based on the issue category.
-4.	Rich Messaging: Use WhatsApp features like Buttons (for quick category selection), List Messages (for sub-categories), and Formatting (Bold/Italic) to make responses scannable.
-________________________________________
-Classification & Resolution Logic
-Follow these resolution windows and sub-categories strictly:
-Category	Sub-Categories (Buttons/Lists)	Resolution SLA
-Failed Transactions	Outward Failed, Delayed Incoming, Double Debit, No Reversal	24 - 72 Hours
-POS Issues	Debited/No Receipt, Merchant not paid, Double Debit	24 - 72 Hours
-Bills & Airtime	DSTV/GOTV, Electricity Token, Airtime/Data not delivered	24 - 72 Hours
-ATM Errors	Same Bank, Other Bank, Cash Not Dispensed	24 Hours - 5 Working Days
-Account Restrictions	Suspicious Inflow (iMatch), Missing KYC, Address Verification	24 Working Hours
-Card Issues	Card Delivery Delay, Wrong Branch, Compromised/Unauthorized	24 - 72 Hours
-Account Updates	BVN/NIN Update, Name/Address Update, App Login Issues	24 Hours (Initial Update)
-________________________________________
+1. Complaint Classification: Categorize every message according to the Wema Bank Classification Schema.
+2. Entity Extraction: Automatically identify Account Numbers, Amounts, Dates.
+3. SLA Management: Communicating specific resolution timelines.
+4. Rich Messaging: Use WhatsApp Buttons and Lists to make responses scannable.
+
 Response Guidelines
 Every response must follow this sequence:
-1.	Acknowledgement: "I hear you, and I’m sorry for the stress this has caused."
-2.	Specific Recognition: Use the sub-category name (e.g., "I see you're having trouble with a POS Double Debit").
-3.	Information Check: If any of the following are missing, ask for them specifically: Account Number, Amount, Date, Reference ID, or Phone Number.
-o	Note: Never ask for PINs or Passwords.
-4.	The SLA Promise: State clearly: "I will provide an initial update within 24 hours, and we aim to resolve this within [Insert Category SLA Window]".
-5.	Reassurance: End with a warm closing like "We’ve got you covered."
-Handling Nigerian Context (NLP Quality)
-•	If a user says "money still hang," recognize it as a Failed Transfer or Delayed Incoming Transfer.
-•	If a user says "e no gree go," recognize it as a Failed Transaction or App Login Issue.
-•	If a user says "na today e start," acknowledge the recency of the issue.
-________________________________________
-Interaction Examples
-User: "Abeg, I do transfer since morning and the money don leave my account but my person never see am."
-ALAT Buddy:
-"I’m sorry about that delay—I know how important it is for your money to arrive on time.
-It sounds like an Outward Transfer issue. To help me track this down, please provide:
-•	The Destination Account Number
-•	The Transaction Reference (if you have it)
-Resolution Timeline: I'll give you an update within 24 hours. Most transfer issues are resolved within 24-72 hours.
-[Button: Provide Details] [Button: Speak to Agent]"
-Knowledge Base: What ALAT Can Do
-You must be able to answer questions and provide "How-To" guidance on the following:
-•	Account Opening: Digital onboarding for Tier 1 (Easy Life), Tier 2, and Tier 3 accounts. (Requirements: BVN, Phone, Passport photo).
-•	Transfers: Local (NIP) and International FX transfers.
-•	Loans: ALAT Instant Loans (Payday, Salary, Goal-based, and Device loans) with no paperwork.
-•	Savings: ALAT Goals (Personal, Group, and "Stash"). Mention interest rates (up to 4.65% p.a.).
-•	Cards: Requesting virtual cards or physical debit cards (Mastercard/Visa) with free delivery anywhere in Nigeria.
-•	Value Added Services: Airtime/Data top-ups, Insurance plans, Travel/Flight bookings, and Cinema tickets.
-•	Security: Card blocking (Freezing), PIN resets, and "SAW" (Smart ALAT by Wema) voice commands.
-B. The "Financial Guide" (Product Inquiry)
-•	Trigger: "How can I get a loan?", "I want to save."
-•	Action: Explain requirements simply.
-•	Prompting Tone: Encouraging and clear.
-•	Example: "To get an ALAT loan, you don't need collateral! Just have an active account with consistent inflows. Want to see how much you qualify for? [Check Eligibility]"
-C. The "Security Warden" (Urgent/Fraud)
-•	Trigger: "Lost my card," "Unknown debit," "My phone was stolen."
-•	Action: Immediate escalation.
-•	Prompting Tone: Urgent and protective.
-•	Constraint: NEVER ask for PIN/OTP. Remind them: "I will never ask for your PIN."
-•	Button Usage: [Freeze Card Now], [Block Account], [Report Fraud].
+1. Acknowledgement: "I hear you..."
+2. Specific Recognition: Use the sub-category name.
+3. Information Check: Ask for missing details (Account Num, Amount, Date). NEVER ask for PIN/OTP.
+4. The SLA Promise: State clearly resolution time.
+5. Reassurance: End with a warm closing.
 
+Handling Nigerian Context:
+- "money still hang" -> Failed Transfer.
+- "e no gree go" -> Failed Transaction/Login.
 
-  6. **CONTACT & NEXT STEPS:**
-     - **Book a Meeting:** https://calendly.com/muyog03/30min (Primary Goal!)
-     - **Website:** https://business.alat.ng/
-     - **Email:** help@alat.ng
-     - **Phone:** +234700 2255 2528
+Knowledge Base:
+- Account Opening (Tier 1/2/3).
+- Transfers (NIP/FX).
+- Loans (Instant/Payday).
+- Savings (Goals/Stash).
+- Cards (Request/Block).
+- Security (Block/Freeze).
 
-     COMPLAINT PROCESS:
+CONTACT & NEXT STEPS:
+- Book a Meeting: https://calendly.com/muyog03/30min
+- Website: https://business.alat.ng/
+- Email: help@alat.ng
+- Phone: +234700 2255 2528
 
-If a user complains, empathize first.
+COMPLAINT PROCESS (CRITICAL):
+- If a user complains, empathize first.
+- CRITICAL: Check if you have their Name and Email. If missing, ASK.
+- Once provided, call 'log_complaint'.
+- If user asks status, use 'check_ticket_status'.
+- If user is angry, use 'escalate_ticket'.
 
-CRITICAL: Before logging a ticket, you MUST check if you know their Name and Email.
+CRITICAL: OUTPUT FORMAT (Strict JSON)
+1. TEXT REPLY:
+   { "response": { "type": "text", "body": "Your formatted text here..." }, "memory_update": "..." }
 
-If you do not know their email, ASK THEM: 'To file this report, I just need your name and email address.'
+2. BUTTONS (Prioritize this for menus!):
+   { "response": { "type": "button", "body": "Select an option below: 👇", "options": ["Book Demo 📅", "Our Services 🛠️"] }, "memory_update": "..." }
 
-Once provided, call the log_complaint tool with all details.
-
-STATUS CHECKS: If a user asks 'What is happening with my complaint?', use the check_ticket_status tool.
-
-ESCALATIONS: If a user wants to update a ticket or says it is taking too long, ask for the Ticket ID (if the context doesn't have it) and use escalate_ticket."
-
-User Experience Example:
-User: "My app is crashing."
-
-Bot: "I'm sorry about that. I can log a support ticket for you. Could you please provide your Name and Email address so our team can contact you?"
-
-User: "I'm John Doe, john@example.com."
-
-Bot: (Calls log_complaint("App Crash", "...", "john@example.com", "John Doe"))
-
-Bot: "Thanks John. Ticket #2045 has been logged."
-
-User: (2 days later) "Any update on my ticket?"
-
-Bot: (Calls check_ticket_status) -> "Ticket #2045 is currently Resolved."
-
-
-  CRITICAL: OUTPUT FORMAT (Strict JSON)
-  
-  1. **TEXT REPLY:**
-     { "response": { "type": "text", "body": "Your formatted text here..." }, "memory_update": "..." }
-
-  2. **BUTTONS (Prioritize this for menus!):**
-     *Constraint: Max 3 buttons. Max 20 chars per title.*
-     { "response": { "type": "button", "body": "Select an option below: 👇", "options": ["Book Demo 📅", "Our Services 🛠️", "Contact Us 📞"] }, "memory_update": "..." }
-
-  3. **MEDIA (Images/Video):**
-     { "response": { "type": "image", "link": "...", "caption": "..." }, "memory_update": "..." }
-
-  MEMORY INSTRUCTIONS:
-  - Add new user details to "memory_update".
-  - Use "SYSTEM CONTEXT" to be smart (e.g., "Good Afternoon! ☀️").
+3. MEDIA:
+   { "response": { "type": "image", "link": "...", "caption": "..." }, "memory_update": "..." }
 `;
 
 // ============================================================
@@ -154,32 +91,32 @@ const GEMINI_TOOLS = [
     function_declarations: [
       {
         name: "log_complaint",
-        description: "Creates a support ticket. Use this ONLY after you have asked the user for their Name and Email (if not already known).",
+        description: "Creates a support ticket. Use ONLY after asking for Name and Email.",
         parameters: {
           type: "OBJECT",
           properties: {
-            subject: { type: "STRING", description: "Short title of issue." },
-            details: { type: "STRING", description: "Full details of the complaint." },
-            user_email: { type: "STRING", description: "The user's email address." },
-            user_name: { type: "STRING", description: "The user's full name." }
+            subject: { type: "STRING" },
+            details: { type: "STRING" },
+            user_email: { type: "STRING" },
+            user_name: { type: "STRING" }
           },
           required: ["subject", "details"]
         }
       },
       {
         name: "check_ticket_status",
-        description: "Checks the status of the user's recent support tickets.",
+        description: "Checks status of support tickets.",
         parameters: { type: "OBJECT", properties: {} } 
       },
       {
         name: "escalate_ticket",
-        description: "Escalates an existing ticket or adds an update/complaint to it.",
+        description: "Escalates a ticket.",
         parameters: {
           type: "OBJECT",
           properties: {
-            ticket_id: { type: "NUMBER", description: "The ID of the ticket to update." },
-            update_text: { type: "STRING", description: "The new information or complaint details." },
-            is_urgent: { type: "BOOLEAN", description: "Set to true if user is angry or demands escalation." }
+            ticket_id: { type: "NUMBER" },
+            update_text: { type: "STRING" },
+            is_urgent: { type: "BOOLEAN" }
           },
           required: ["ticket_id", "update_text"]
         }
@@ -217,17 +154,13 @@ export default async function handler(req, res) {
       if (message.type === "text") userInput = message.text.body;
       else if (message.type === "audio") userInput = "[User sent a voice note]"; 
       else if (message.type === "interactive") userInput = message.interactive.button_reply?.title || message.interactive.list_reply?.title;
-      else if (message.type === "contacts") {
-        const contact = message.contacts[0];
-        userInput = `[Shared Contact: ${contact.name.formatted_name}, Phone: ${contact.phones?.[0]?.phone}]`;
-      }
-      else if (message.type === "location") userInput = `[Location: Lat ${message.location.latitude}, Long ${message.location.longitude}]`;
+      else if (message.type === "contacts") userInput = `[Shared Contact]`;
+      else if (message.type === "location") userInput = `[Location]`;
 
       if (userInput) {
         try {
           // A. GET PROFILE
-          const profileUrl = `user_profiles?phone=eq.${senderPhone}&select=*`;
-          const profileData = await supabaseRequest(profileUrl, 'GET');
+          const profileData = await supabaseRequest(`user_profiles?phone=eq.${senderPhone}&select=*`, 'GET');
           let currentProfile = profileData && profileData.length > 0 ? profileData[0] : {};
 
           if (!currentProfile.phone) {
@@ -238,8 +171,7 @@ export default async function handler(req, res) {
           }
 
           // B. GET HISTORY
-          const historyUrl = `messages?user_phone=eq.${senderPhone}&order=id.desc&limit=15&select=role,content`;
-          const historyData = await supabaseRequest(historyUrl, 'GET') || [];
+          const historyData = await supabaseRequest(`messages?user_phone=eq.${senderPhone}&order=id.desc&limit=15&select=role,content`, 'GET') || [];
           const chatHistory = historyData.reverse().map(msg => ({
             role: msg.role === 'assistant' ? 'model' : 'user',
             parts: [{ text: msg.content }]
@@ -262,67 +194,63 @@ export default async function handler(req, res) {
           const fullConversation = [...chatHistory, { role: "user", parts: [{ text: contextString }] }];
 
           // D. ASK GEMINI (Round 1)
+          // ⚠️ NOTE: Change "gemini-2.0-flash" to "gemini-3.0-flash-preview" below IF you have access.
           const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
           
           let apiBody = {
             contents: fullConversation,
-            tools: GEMINI_TOOLS, // Attach tools here
+            tools: GEMINI_TOOLS,
             system_instruction: { parts: [{ text: SYSTEM_PROMPT }] },
             generationConfig: { responseMimeType: "application/json" }
           };
 
-          let geminiResponse = await fetch(geminiUrl, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(apiBody)
-          });
-
+          let geminiResponse = await fetch(geminiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(apiBody) });
           let geminiData = await geminiResponse.json();
           let candidate = geminiData.candidates?.[0]?.content?.parts?.[0];
           
-          // E. CHECK FOR TOOL USE (Function Call)
-          // If Gemini wants to use a tool, it might NOT be valid JSON yet.
+          // E. CHECK FOR TOOL USE
           if (candidate?.functionCall) {
               const call = candidate.functionCall;
               const args = call.args;
               let toolResultText = "Tool execution failed.";
 
-              // 1. EXECUTE THE TOOL
               if (call.name === "log_complaint") {
                  const tID = await createTicket(senderPhone, args.subject, args.details, args.user_email, args.user_name);
                  toolResultText = tID ? `SUCCESS: Ticket #${tID} created.` : "ERROR: Failed to create ticket.";
               }
-              else if (call.name === "check_ticket_status") {
-                 toolResultText = await getTicketStatus(senderPhone);
-              }
-              else if (call.name === "escalate_ticket") {
-                 toolResultText = await updateTicket(args.ticket_id, args.update_text, args.is_urgent);
-              }
+              else if (call.name === "check_ticket_status") toolResultText = await getTicketStatus(senderPhone);
+              else if (call.name === "escalate_ticket") toolResultText = await updateTicket(args.ticket_id, args.update_text, args.is_urgent);
 
-              // 2. SEND RESULT BACK TO GEMINI (Round 2)
-              // We append the function call + the function response to the conversation
+              // Round 2 (Send result back)
               const followUpContents = [
                   ...fullConversation,
                   { role: "model", parts: [{ functionCall: call }] },
                   { role: "function", parts: [{ functionResponse: { name: call.name, response: { result: toolResultText } } }] }
               ];
-
-              // Ask Gemini again for the final JSON reply
               apiBody.contents = followUpContents;
-              geminiResponse = await fetch(geminiUrl, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(apiBody)
-              });
+              geminiResponse = await fetch(geminiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(apiBody) });
               geminiData = await geminiResponse.json();
           }
 
-          // F. PARSE FINAL RESPONSE
+          // F. PARSE FINAL RESPONSE (SMART CLEANER)
+          // This block fixes the "weird text" issue by finding the JSON inside the conversational filler.
           let aiRawText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
           let aiOutput;
           try { 
-              aiOutput = JSON.parse(aiRawText.replace(/```json|```/g, "").trim()); 
-          } catch (e) { 
-              // Fallback if Gemini speaks plain text instead of JSON
-              aiOutput = { response: { type: "text", body: aiRawText || "I'm having a moment! 😅" } }; 
+              // 1. Remove Markdown code blocks
+              let cleanText = aiRawText.replace(/```json|```/g, "").trim();
+              // 2. Extract ONLY the JSON object (from first { to last })
+              const firstBrace = cleanText.indexOf('{');
+              const lastBrace = cleanText.lastIndexOf('}');
+              if (firstBrace !== -1 && lastBrace !== -1) {
+                  cleanText = cleanText.substring(firstBrace, lastBrace + 1);
+              }
+              aiOutput = JSON.parse(cleanText); 
+          } 
+          catch (e) { 
+              // If JSON parsing fails completely, fall back to plain text so the bot doesn't crash or show code
+              console.error("JSON Parsing Error:", e);
+              aiOutput = { response: { type: "text", body: aiRawText } }; 
           }
 
           // G. UPDATE MEMORY
