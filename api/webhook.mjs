@@ -144,7 +144,49 @@ Bot: (Calls check_ticket_status) -> "Ticket #2045 is currently Resolved."
   MEMORY INSTRUCTIONS:
   - Add new user details to "memory_update".
   - Use "SYSTEM CONTEXT" to be smart (e.g., "Good Afternoon! ☀️").
-  `;
+`;
+
+// ============================================================
+// 3. TOOLS DEFINITION
+// ============================================================
+const GEMINI_TOOLS = [
+  {
+    function_declarations: [
+      {
+        name: "log_complaint",
+        description: "Creates a support ticket. Use this ONLY after you have asked the user for their Name and Email (if not already known).",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            subject: { type: "STRING", description: "Short title of issue." },
+            details: { type: "STRING", description: "Full details of the complaint." },
+            user_email: { type: "STRING", description: "The user's email address." },
+            user_name: { type: "STRING", description: "The user's full name." }
+          },
+          required: ["subject", "details"]
+        }
+      },
+      {
+        name: "check_ticket_status",
+        description: "Checks the status of the user's recent support tickets.",
+        parameters: { type: "OBJECT", properties: {} } 
+      },
+      {
+        name: "escalate_ticket",
+        description: "Escalates an existing ticket or adds an update/complaint to it.",
+        parameters: {
+          type: "OBJECT",
+          properties: {
+            ticket_id: { type: "NUMBER", description: "The ID of the ticket to update." },
+            update_text: { type: "STRING", description: "The new information or complaint details." },
+            is_urgent: { type: "BOOLEAN", description: "Set to true if user is angry or demands escalation." }
+          },
+          required: ["ticket_id", "update_text"]
+        }
+      }
+    ]
+  }
+];
 
 // ============================================================
 // 4. MAIN HANDLER
