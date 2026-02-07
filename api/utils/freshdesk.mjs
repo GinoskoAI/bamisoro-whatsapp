@@ -1,124 +1,91 @@
 const FRESHDESK_DOMAIN = process.env.FRESHDESK_DOMAIN;
 const FRESHDESK_API_KEY = process.env.FRESHDESK_API_KEY;
 
-/* =========================
-   HELPERS
-========================= */
-function authHeader() {
-  return {
-    Authorization:
-      'Basic ' +
-      Buffer.from(`${FRESHDESK_API_KEY}:X`).toString('base64'),
-    'Content-Type': 'application/json'
+const getHeaders = () => ({
+  'Authorization': `Basic ${Buffer.from(`${FRESHDESK_API_KEY}:X`).toString('base64')}`,
+  'Content-Type': 'application/json'
+});
+
+// 1. MANAGE CONTACT
+export async function createOrUpdateContact(phone, name, email) {
+  if (!FRESHDESK_DOMAIN || !FRESHDESK_API_KEY) return null;
+  const searchUrl = `https://${FRESHDESK_DOMAIN}/api/v2/contacts?phone=${encodeURIComponent(phone)}`;
+  
+  try {
+    const searchRes = await fetch(searchUrl, { headers: getHeaders() });
+    const searchData = await searchRes.json();
+
+    if (searchData.length > 0) {
+      const contact = searchData[0];
+      return contact.id; // Return existing ID
+    } else {
+      const createRes = await fetch(`https://${FRESHDESK_DOMAIN}/api/v2/contacts`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ 
+          name: name || "WhatsApp User", 
+          phone: phone, 
+          email: email, 
+          unique_external_id: phone 
+        })
+      });
+      if (!createRes.ok) return null;
+      const createData = await createRes.json();
+      return createData.id;
+    }
+  } catch (e) { return null; }
+}
+
+// 2. CREATE TICKET (FIXED: Removed 'cf_whatsapp_number')
+export async function createTicket(userPhone, subject, description, email, name) {
+  const contactId = await createOrUpdateContact(userPhone, name, email);
+  if (!contactId) return null;
+
+  const url = `https://${FRESHDESK_DOMAIN}/api/v2/tickets`;
+  const ticketData = {
+    description: `${description} \n\n[Source: WhatsApp Bot]`,
+    subject: subject,
+    priority: 2,
+    status: 2,
+    source: 7,
+    requester_id: contactId
+    // REMOVED: custom_fields: { cf_whatsapp_number: userPhone } <-- CAUSING ERROR
   };
-}
 
-/* =========================
-   CREATE TICKET
-========================= */
-export async function createTicket(
-  phone,
-  subject,
-  description,
-  email,
-  name
-) {
   try {
-    const payload = {
-      subject,
-      description,
-      email: email || `whatsapp_${phone}@example.com`,
-      priority: 1,
-      status: 2,
-      custom_fields: {
-        cf_whatsapp_number: phone
+      const response = await fetch(url, { method: 'POST', headers: getHeaders(), body: JSON.stringify(ticketData) });
+      if (response.ok) {
+          const data = await response.json();
+          return data.id;
       }
-    };
-
-    if (name) payload.name = name;
-
-    const res = await fetch(
-      `https://${FRESHDESK_DOMAIN}/api/v2/tickets`,
-      {
-        method: 'POST',
-        headers: authHeader(),
-        body: JSON.stringify(payload)
-      }
-    );
-
-    if (!res.ok) {
-      console.error('Freshdesk createTicket failed:', await res.text());
+      const errText = await response.text();
+      console.error("Freshdesk Create Error:", errText); // Log actual error
       return null;
-    }
-
-    const data = await res.json();
-    return data.id;
-  } catch (err) {
-    console.error('createTicket error:', err);
-    return null;
-  }
+  } catch (e) { return null; }
 }
 
-/* =========================
-   GET TICKET STATUS
-========================= */
-export async function getTicketStatus(phone) {
+// 3. CHECK STATUS
+export async function getTicketStatus(userPhone) {
+  const contactId = await createOrUpdateContact(userPhone);
+  if (!contactId) return "No profile found.";
+
+  const url = `https://${FRESHDESK_DOMAIN}/api/v2/tickets?requester_id=${contactId}&include=stats&order_by=created_at&order_type=desc`;
   try {
-    const searchUrl = `https://${FRESHDESK_DOMAIN}/api/v2/search/tickets?query="cf_whatsapp_number:'${phone}'"`;
-
-    const res = await fetch(searchUrl, {
-      method: 'GET',
-      headers: authHeader()
-    });
-
-    if (!res.ok) {
-      console.error('Freshdesk getTicketStatus failed:', await res.text());
-      return 'Unable to fetch ticket status at the moment.';
-    }
-
-    const data = await res.json();
-    const ticket = data?.results?.[0];
-
-    if (!ticket) return 'No active ticket found for your number.';
-
-    return `Your ticket (#${ticket.id}) is currently ${ticket.status}.`;
-  } catch (err) {
-    console.error('getTicketStatus error:', err);
-    return 'Error retrieving ticket status.';
-  }
+      const response = await fetch(url, { headers: getHeaders() });
+      const tickets = await response.json();
+      if (!tickets || tickets.length === 0) return "You have no open tickets.";
+      return tickets.slice(0, 3).map(t => `🎫 *#${t.id}*: ${t.subject} (${t.status === 2 ? 'Open' : 'Resolved'})`).join("\n");
+  } catch (e) { return "Error checking status."; }
 }
 
-/* =========================
-   UPDATE / ESCALATE TICKET
-========================= */
-export async function updateTicket(ticketId, note, urgent = false) {
+// 4. UPDATE TICKET
+export async function updateTicket(ticketId, noteText, escalate = false) {
   try {
-    const payload = {
-      note,
-      private: false
-    };
-
-    if (urgent) {
-      payload.priority = 4;
-    }
-
-    const res = await fetch(
-      `https://${FRESHDESK_DOMAIN}/api/v2/tickets/${ticketId}/notes`,
-      {
-        method: 'POST',
-        headers: authHeader(),
-        body: JSON.stringify(payload)
+      const noteUrl = `https://${FRESHDESK_DOMAIN}/api/v2/tickets/${ticketId}/notes`;
+      await fetch(noteUrl, { method: 'POST', headers: getHeaders(), body: JSON.stringify({ body: noteText, private: false }) });
+      if (escalate) {
+         await fetch(`https://${FRESHDESK_DOMAIN}/api/v2/tickets/${ticketId}`, { method: 'PUT', headers: getHeaders(), body: JSON.stringify({ priority: 4 }) });
       }
-    );
-
-    if (!res.ok) {
-      console.error('Freshdesk updateTicket failed:', await res.text());
-      return 'Failed to update ticket.';
-    }
-
-    return 'Ticket updated successfully.';
-  } catch (err) {
-    console.error('updateTicket error:', err);
-    return 'Error updating ticket.';
-  }
+      return `Ticket #${ticketId} updated.`;
+  } catch (e) { return "Update failed."; }
 }
