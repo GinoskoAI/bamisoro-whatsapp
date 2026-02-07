@@ -1,5 +1,5 @@
 // api/webhook.mjs
-// VERSION: LITE & STABLE - Gemini 2.5 Flash (Text-First Mode)
+// VERSION: GEMINI 2.5 FLASH - NATIVE WHATSAPP BLOCKS & TOOLS
 
 import { createTicket, getTicketStatus, updateTicket } from './utils/freshdesk.mjs';
 
@@ -27,27 +27,29 @@ async function supabaseRequest(endpoint, method, body = null) {
 }
 
 // ============================================================
-// 2. SYSTEM PROMPT (Simplified for Text-First)
+// 2. SYSTEM PROMPT (Optimized for Blocks)
 // ============================================================
 const SYSTEM_PROMPT = `
-Role: ALAT Buddy (Wema Bank AI).
-Tone: Professional, Nigerian Friendly (use "Abeg", "We dey for you"), and formatted.
-Goal: Support customers & Manage Tickets.
+Role: ALAT Support Agent (Wema Bank).
+Tone: Professional, Helpful, Nigerian Friendly (use "Abeg", "We dey for you").
+Goal: Solve issues efficiently using Tools and Buttons.
 
-CRITICAL INSTRUCTIONS:
-1. **SPEAK NORMALLY:** Do NOT output JSON. Just write your response as text.
-2. **EMOJIS:** Use emojis (👋, 🚀, ✨) freely in every message.
-3. **BUTTONS:** If you want to show buttons, add them at the very end of your message separated by pipes (|||).
-   Format: "Message text here ||| Button 1 | Button 2 | Button 3"
+CRITICAL RULES:
+1. **MODEL:** You are running on Gemini 2.5 Flash. Be fast and accurate.
+2. **BUTTONS (BLOCKS):** To send WhatsApp Buttons, you MUST add them at the very end of your message separated by "|||".
+   Format: "Your message text here. ||| Button 1 | Button 2 | Button 3"
+   Example: "How can I help you? ||| Log Complaint | Check Status | Talk to Agent"
+3. **TOOL USE:** - You MUST use the 'log_complaint' tool to create tickets. 
+   - NEVER say "I have logged the ticket" unless you have actually called the tool and received a Ticket ID.
+   - If you need Name/Email, ASK the user first.
 
-Capabilities:
-1. **Complaint Logging:** Ask for Name/Email first. Then use 'log_complaint'.
-2. **Status Checks:** Use 'check_ticket_status'.
-3. **Escalation:** Use 'escalate_ticket' if user is angry.
+CAPABILITIES:
+- If user complains -> Ask for details -> Call 'log_complaint'.
+- If user asks status -> Call 'check_ticket_status'.
+- If user is angry -> Call 'escalate_ticket'.
 
-Context:
-- User is Nigerian.
-- "money still hang" = Failed Transfer.
+CONTEXT:
+User is Nigerian. "Money hung" = Failed Transfer.
 `;
 
 // ============================================================
@@ -57,17 +59,17 @@ const GEMINI_TOOLS = [{
   function_declarations: [
     {
       name: "log_complaint",
-      description: "Log ticket. Ask for Name/Email first.",
-      parameters: { type: "OBJECT", properties: { subject: {type:"STRING"}, details: {type:"STRING"}, user_email: {type:"STRING"}, user_name: {type:"STRING"} }, required: ["subject", "details"] }
+      description: "Creates a support ticket. REQUIRED: subject, details, user_email, user_name.",
+      parameters: { type: "OBJECT", properties: { subject: {type:"STRING"}, details: {type:"STRING"}, user_email: {type:"STRING"}, user_name: {type:"STRING"} }, required: ["subject", "details", "user_email", "user_name"] }
     },
     {
       name: "check_ticket_status",
-      description: "Check ticket status.",
+      description: "Checks status of tickets for this phone number.",
       parameters: { type: "OBJECT", properties: {} } 
     },
     {
       name: "escalate_ticket",
-      description: "Escalate ticket.",
+      description: "Escalates a specific ticket ID.",
       parameters: { type: "OBJECT", properties: { ticket_id: {type:"NUMBER"}, update_text: {type:"STRING"}, is_urgent: {type:"BOOLEAN"} }, required: ["ticket_id", "update_text"] }
     }
   ]
@@ -100,6 +102,8 @@ export default async function handler(req, res) {
 
       if (userInput) {
         try {
+          console.log(`[${senderPhone}] Incoming: ${userInput}`);
+
           // A. PROFILE & HISTORY
           const profileData = await supabaseRequest(`user_profiles?phone=eq.${senderPhone}&select=*`, 'GET');
           let currentProfile = profileData && profileData.length > 0 ? profileData[0] : {};
@@ -109,7 +113,6 @@ export default async function handler(req, res) {
             currentProfile = { name: whatsappName };
           }
 
-          // Get last 8 messages
           const historyData = await supabaseRequest(`messages?user_phone=eq.${senderPhone}&order=id.desc&limit=8&select=role,content`, 'GET') || [];
           const chatHistory = historyData.reverse().map(msg => ({
             role: msg.role === 'assistant' ? 'model' : 'user',
@@ -120,8 +123,7 @@ export default async function handler(req, res) {
           const contextString = `USER: ${currentProfile.name} (${senderPhone})\nINPUT: "${userInput}"`;
           const fullConversation = [...chatHistory, { role: "user", parts: [{ text: contextString }] }];
 
-          // C. CALL GEMINI (User requested 2.5 Flash)
-          // ⚠️ IF THIS FAILS, SWITCH BACK TO "gemini-2.0-flash" or "gemini-1.5-flash"
+          // C. CALL GEMINI (STRICTLY 2.5 FLASH)
           const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
           
           let apiBody = {
@@ -132,11 +134,11 @@ export default async function handler(req, res) {
 
           let geminiResponse = await fetch(geminiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(apiBody) });
           
-          // Check for Model 404 Error
+          // Debugging: Check if 2.5 Exists/Works
           if (!geminiResponse.ok) {
-             console.error("Gemini Error:", await geminiResponse.text());
-             // Fallback attempt with 2.0 if 2.5 fails (Optional safety net)
-             // ... logic removed to keep file simple ...
+             const errText = await geminiResponse.text();
+             console.error("Gemini 2.5 Error:", errText);
+             // If 2.5 fails, it returns a text error. We log it but do not crash.
           }
 
           let geminiData = await geminiResponse.json();
@@ -147,15 +149,17 @@ export default async function handler(req, res) {
               const call = candidate.functionCall;
               const args = call.args;
               let toolResultText = "Failed.";
+              console.log(`Tool Call: ${call.name}`);
 
               if (call.name === "log_complaint") {
                  const tID = await createTicket(senderPhone, args.subject, args.details, args.user_email, args.user_name);
                  toolResultText = tID ? `Ticket #${tID} created.` : "Failed to create ticket.";
+                 console.log(toolResultText);
               }
               else if (call.name === "check_ticket_status") toolResultText = await getTicketStatus(senderPhone);
               else if (call.name === "escalate_ticket") toolResultText = await updateTicket(args.ticket_id, args.update_text, args.is_urgent);
 
-              // Round 2
+              // Round 2 (Send result back)
               const followUpContents = [
                   ...fullConversation,
                   { role: "model", parts: [{ functionCall: call }] },
@@ -166,17 +170,18 @@ export default async function handler(req, res) {
               geminiData = await geminiResponse.json();
           }
 
-          // E. PARSE RESPONSE (The "Splitter" Method)
+          // E. PARSE RESPONSE FOR BLOCKS (BUTTONS)
           let finalAiText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "System Error";
           
-          // Check for buttons separator "|||"
           let messageBody = finalAiText;
           let buttons = [];
           
+          // Detect "|||" to trigger WhatsApp Blocks
           if (finalAiText.includes("|||")) {
              const parts = finalAiText.split("|||");
              messageBody = parts[0].trim();
              const buttonPart = parts[1].trim();
+             // Split by | and take max 3 buttons
              buttons = buttonPart.split("|").map(b => b.trim()).filter(b => b.length > 0).slice(0, 3);
           }
 
@@ -187,6 +192,7 @@ export default async function handler(req, res) {
           let payload = {};
 
           if (buttons.length > 0) {
+             // Send Interactive Button Block
              const btnObjects = buttons.map((opt, i) => ({ 
                type: "reply", reply: { id: `btn_${i}`, title: opt.substring(0, 20) } 
              }));
@@ -195,6 +201,7 @@ export default async function handler(req, res) {
                interactive: { type: "button", body: { text: messageBody }, action: { buttons: btnObjects } } 
              };
           } else {
+             // Send Plain Text
              payload = { messaging_product: "whatsapp", to: senderPhone, text: { body: messageBody } };
           }
 
