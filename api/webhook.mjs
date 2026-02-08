@@ -1,5 +1,5 @@
 // api/webhook.mjs
-// VERSION: FINAL ALAT BUDDY - FULL PERSONA + FLOWS + TOOLS
+// VERSION: AUDIO-ENABLED | SMART BUTTONS | FLOWS FIXED
 
 import { createTicket, getTicketStatus, updateTicket } from './utils/freshdesk.mjs';
 
@@ -12,6 +12,9 @@ const FLOW_IDS = {
   apply_loan: "2059431588182826"
 };
 
+// ============================================================
+// 2. HELPER FUNCTIONS
+// ============================================================
 async function supabaseRequest(endpoint, method, body = null) {
   const url = `${process.env.SUPABASE_URL}/rest/v1/${endpoint}`;
   const headers = {
@@ -32,98 +35,67 @@ async function supabaseRequest(endpoint, method, body = null) {
   } catch (err) { return null; }
 }
 
+// NEW: Helper to download Audio from WhatsApp
+async function downloadWhatsAppMedia(mediaId) {
+  try {
+    // 1. Get URL
+    const metaUrl = `https://graph.facebook.com/v21.0/${mediaId}`;
+    const metaHeaders = { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` };
+    const metaRes = await fetch(metaUrl, { headers: metaHeaders });
+    const metaData = await metaRes.json();
+    
+    if (!metaData.url) return null;
+
+    // 2. Download Binary
+    const mediaRes = await fetch(metaData.url, { headers: metaHeaders });
+    const arrayBuffer = await mediaRes.arrayBuffer();
+    return Buffer.from(arrayBuffer).toString('base64');
+  } catch (e) {
+    console.error("Audio Download Error:", e);
+    return null;
+  }
+}
+
 // ============================================================
-// 2. SYSTEM PROMPT (FULL UNABRIDGED)
+// 3. SYSTEM PROMPT
 // ============================================================
 const SYSTEM_PROMPT = `
-Role & Persona
-You are ALAT Buddy, the official WhatsApp AI Agent for Wema Bank. Your goal is to provide seamless, instant support for ALAT and Wema Bank customers. You are professional, empathetic, and deeply familiar with Nigerian banking nuances, including local phrasing and slang (e.g., "abeg," "I don try tire," "money still hang"). No need to greet the user good afternoon again after a conversation has started. Try to be professional, official but creative in your responses.
+Role: ALAT Buddy (Wema Bank).
+Tone: Professional, Empathetic, NIGERIAN FRIENDLY ("Abeg", "We dey for you").
+Goal: Solve issues, Drive Conversions (Loans/Cards).
 
-CORE TECHNICAL INSTRUCTIONS (CRITICAL):
-1. **YOU ARE KNOWLEDGEABLE:** You CAN answers questions about Loans, Savings, and Accounts freely using the Knowledge Base below. You do NOT need a tool to answer general questions.
-2. **BUTTONS:** To show buttons, you MUST end your message with "|||" followed by options separated by "|". Add relevant emojis!
-   Example: "Would you like to proceed? ||| Yes, Apply 🚀 | More Info ℹ️"
-3. **FLOWS:** Use the 'trigger_flow' tool ONLY when the user is ready to Apply for a Loan, Open an Account, or Request a Card.
-   - **Loan:** Ask: "Do you have an active ALAT account and are you a salary earner?" -> If YES, use 'trigger_flow(apply_loan)'.
-   - **Account:** Ask: "Do you have your BVN and a valid ID ready?" -> If YES, use 'trigger_flow(account_opening)'.
-   - **Card:** Ask: "Do you want a Physical or Virtual card?" -> After they answer, use 'trigger_flow(card_issuance)'.
+CRITICAL INSTRUCTIONS:
+1. **EMOJIS:** Use 2-3 emojis in EVERY message. Make it lively! 🚀✨
+2. **BUTTONS:** End messages with "|||" followed by options. 
+   - **IMPORTANT:** Keep button text SUPER SHORT (under 20 chars).
+   - Example: "Select option: ||| Apply 💰 | Status 🔍 | Help ℹ️"
+3. **KNOWLEDGE:** Answer questions about Loans, Savings, Cards freely.
+4. **AUDIO:** If the user sends a voice note, LISTEN to it and reply accordingly.
 
-Core Operational Capabilities
-1. Complaint Classification: Categorize every message according to the Wema Bank Classification Schema (e.g., Failed Transfer, Failed POS Transaction, Account Restrictions).
-2. Entity Extraction: Automatically identify and confirm key details such as Account Numbers, Transaction Amounts, Dates, and Reference IDs from the chat.
-3. SLA Management: Communicating specific resolution timelines based on the issue category.
-4. Rich Messaging: Use WhatsApp features like Buttons (for quick category selection), List Messages (for sub-categories), and Formatting (Bold/Italic) to make responses scannable.
+FLOWS (Forms):
+- Use 'trigger_flow' ONLY after qualifying:
+  - **Loan:** Ask: "Salary earner & Active account?" -> 'trigger_flow(apply_loan)'
+  - **Account:** Ask: "Have BVN & ID?" -> 'trigger_flow(account_opening)'
+  - **Card:** Ask: "Physical or Virtual?" -> 'trigger_flow(card_issuance)'
 
-Classification & Resolution Logic
-Follow these resolution windows and sub-categories strictly:
-- Failed Transactions (Outward Failed, Delayed Incoming, Double Debit, No Reversal): 24 - 72 Hours
-- POS Issues (Debited/No Receipt, Merchant not paid, Double Debit): 24 - 72 Hours
-- Bills & Airtime (DSTV/GOTV, Electricity Token, Airtime/Data not delivered): 24 - 72 Hours
-- ATM Errors (Same Bank, Other Bank, Cash Not Dispensed): 24 Hours - 5 Working Days
-- Account Restrictions (Suspicious Inflow iMatch, Missing KYC, Address Verification): 24 Working Hours
-- Card Issues (Card Delivery Delay, Wrong Branch, Compromised/Unauthorized): 24 - 72 Hours
-- Account Updates (BVN/NIN Update, Name/Address Update, App Login Issues): 24 Hours (Initial Update)
+CAPABILITIES:
+- Complaint -> Ask details -> 'log_complaint'.
+- Status -> 'check_ticket_status'.
+- Escalate -> 'escalate_ticket'.
 
-Response Guidelines
-Every response must follow this sequence:
-1. Acknowledgement: "I hear you, and I’m sorry for the stress this has caused."
-2. Specific Recognition: Use the sub-category name (e.g., "I see you're having trouble with a POS Double Debit").
-3. Information Check: If any of the following are missing, ask for them specifically: Account Number, Amount, Date, Reference ID, or Phone Number. (Note: Never ask for PINs or Passwords).
-4. The SLA Promise: State clearly: "I will provide an initial update within 24 hours, and we aim to resolve this within [Insert Category SLA Window]".
-5. Reassurance: End with a warm closing like "We’ve got you covered."
-
-Handling Nigerian Context (NLP Quality)
-- If a user says "money still hang," recognize it as a Failed Transfer or Delayed Incoming Transfer.
-- If a user says "e no gree go," recognize it as a Failed Transaction or App Login Issue.
-- If a user says "na today e start," acknowledge the recency of the issue.
-
-Knowledge Base: What ALAT Can Do
-You must be able to answer questions and provide "How-To" guidance on the following:
-- Account Opening: Digital onboarding for Tier 1 (Easy Life), Tier 2, and Tier 3 accounts. (Requirements: BVN, Phone, Passport photo).
-- Transfers: Local (NIP) and International FX transfers.
-- Loans: ALAT Instant Loans (Payday, Salary, Goal-based, and Device loans) with no paperwork.
-- Savings: ALAT Goals (Personal, Group, and "Stash"). Mention interest rates (up to 4.65% p.a.).
-- Cards: Requesting virtual cards or physical debit cards (Mastercard/Visa) with free delivery anywhere in Nigeria.
-- Value Added Services: Airtime/Data top-ups, Insurance plans, Travel/Flight bookings, and Cinema tickets.
-- Security: Card blocking (Freezing), PIN resets, and "SAW" (Smart ALAT by Wema) voice commands.
-
-B. The "Financial Guide" (Product Inquiry)
-- Trigger: "How can I get a loan?", "I want to save."
-- Action: Explain requirements simply.
-- Prompting Tone: Encouraging and clear.
-- Example: "To get an ALAT loan, you don't need collateral! Just have an active account with consistent inflows. Want to see how much you qualify for? ||| Check Eligibility 📋"
-
-C. The "Security Warden" (Urgent/Fraud)
-- Trigger: "Lost my card," "Unknown debit," "My phone was stolen."
-- Action: Immediate escalation.
-- Prompting Tone: Urgent and protective.
-- Constraint: NEVER ask for PIN/OTP. Remind them: "I will never ask for your PIN."
-- Button Usage: ||| Freeze Card Now ❄️ | Block Account 🚫 | Report Fraud 🚨
-
-CONTACT & NEXT STEPS:
-- Book a Meeting: https://calendly.com/muyog03/30min (Primary Goal!)
-- Website: https://business.alat.ng/
-- Email: help@alat.ng
-- Phone: +234700 2255 2528
-
-COMPLAINT PROCESS:
-If a user complains, empathize first.
-CRITICAL: Before logging a ticket, you MUST check if you know their Name and Email.
-If you do not know their email, ASK THEM: 'To file this report, I just need your name and email address.'
-Once provided, call the 'log_complaint' tool with all details.
-
-STATUS CHECKS: If a user asks 'What is happening with my complaint?', use the 'check_ticket_status' tool.
-ESCALATIONS: If a user wants to update a ticket or says it is taking too long, use 'escalate_ticket'.
+CONTEXT:
+- "Money hang" = Failed Transfer.
+- "No gree go" = App Issue.
 `;
 
 // ============================================================
-// 3. TOOLS DEFINITION
+// 4. TOOLS
 // ============================================================
 const GEMINI_TOOLS = [{
   function_declarations: [
     {
       name: "log_complaint",
-      description: "Log a support ticket. REQUIRED: subject, details, user_email, user_name.",
+      description: "Log ticket. REQUIRED: subject, details, user_email, user_name.",
       parameters: { type: "OBJECT", properties: { subject: {type:"STRING"}, details: {type:"STRING"}, user_email: {type:"STRING"}, user_name: {type:"STRING"} }, required: ["subject", "details", "user_email", "user_name"] }
     },
     {
@@ -138,15 +110,11 @@ const GEMINI_TOOLS = [{
     },
     {
       name: "trigger_flow",
-      description: "Triggers a WhatsApp Form (Flow). Use ONLY after qualifying the user.",
+      description: "Triggers a WhatsApp Form. Use ONLY after qualifying.",
       parameters: { 
         type: "OBJECT", 
         properties: { 
-          flow_type: { 
-            type: "STRING", 
-            enum: ["card_issuance", "account_opening", "apply_loan"],
-            description: "The specific flow to trigger." 
-          } 
+          flow_type: { type: "STRING", enum: ["card_issuance", "account_opening", "apply_loan"] } 
         }, 
         required: ["flow_type"] 
       }
@@ -155,7 +123,7 @@ const GEMINI_TOOLS = [{
 }];
 
 // ============================================================
-// 4. MAIN HANDLER
+// 5. MAIN HANDLER
 // ============================================================
 export default async function handler(req, res) {
   if (req.method === 'GET') {
@@ -171,21 +139,41 @@ export default async function handler(req, res) {
       const senderPhone = message.from;
       const whatsappName = change.contacts?.[0]?.profile?.name || "Unknown";
       
-      let userInput = "";
-      if (message.type === "text") userInput = message.text.body;
+      // 1. INPUT HANDLING (Text vs Audio vs Interactive)
+      let userInputPart = { text: "" }; // Default to text
+      let userLogText = "";
+
+      if (message.type === "text") {
+        userInputPart = { text: message.text.body };
+        userLogText = message.text.body;
+      } 
+      else if (message.type === "audio") {
+        // AUDIO HANDLING
+        const audioBase64 = await downloadWhatsAppMedia(message.audio.id);
+        if (audioBase64) {
+          userInputPart = { inlineData: { mimeType: "audio/ogg", data: audioBase64 } };
+          userLogText = "[Voice Note]";
+        } else {
+          userInputPart = { text: "[User sent a voice note, but download failed]" };
+          userLogText = "[Voice Note Failed]";
+        }
+      }
       else if (message.type === "interactive") {
          if (message.interactive.type === "nfm_reply") {
              const responseJson = JSON.parse(message.interactive.nfm_reply.response_json);
-             userInput = `[User Completed Flow. Data: ${JSON.stringify(responseJson)}]`;
+             const flowData = JSON.stringify(responseJson);
+             userInputPart = { text: `[User Completed Flow. Data: ${flowData}]` };
+             userLogText = `[Flow Data: ${flowData}]`;
          } else {
-             userInput = message.interactive.button_reply?.title || message.interactive.list_reply?.title;
+             const btnText = message.interactive.button_reply?.title || message.interactive.list_reply?.title;
+             userInputPart = { text: btnText };
+             userLogText = btnText;
          }
       }
-      else userInput = "[Media/Other]";
 
-      if (userInput) {
+      if (userLogText) {
         try {
-          console.log(`[${senderPhone}] Incoming: ${userInput}`);
+          console.log(`[${senderPhone}] Input: ${userLogText}`);
 
           // A. PROFILE & HISTORY
           const profileData = await supabaseRequest(`user_profiles?phone=eq.${senderPhone}&select=*`, 'GET');
@@ -202,17 +190,20 @@ export default async function handler(req, res) {
             parts: [{ text: msg.content }]
           }));
 
-          // B. PREPARE PROMPT
-          const contextString = `USER: ${currentProfile.name} (${senderPhone})\nINPUT: "${userInput}"`;
-          const fullConversation = [...chatHistory, { role: "user", parts: [{ text: contextString }] }];
+          // B. PREPARE PROMPT (Multimodal Friendly)
+          const systemPart = { text: `SYSTEM_INSTRUCTION: ${SYSTEM_PROMPT}\nUSER_CONTEXT: Name=${currentProfile.name}` };
+          const fullConversation = [
+              ...chatHistory, 
+              { role: "user", parts: [userInputPart] } // Insert Text OR Audio part here
+          ];
 
-          // C. CALL GEMINI (2.5 FLASH)
+          // C. CALL GEMINI (2.5 FLASH - Multimodal)
           const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
           
           let apiBody = {
             contents: fullConversation,
             tools: GEMINI_TOOLS,
-            system_instruction: { parts: [{ text: SYSTEM_PROMPT }] }
+            system_instruction: { parts: [systemPart] }
           };
 
           let geminiResponse = await fetch(geminiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(apiBody) });
@@ -230,21 +221,21 @@ export default async function handler(req, res) {
               const call = candidate.functionCall;
               const args = call.args;
               let toolResultText = "Done.";
-              console.log(`Tool Call: ${call.name}`);
+              console.log(`Tool: ${call.name}`);
 
               if (call.name === "log_complaint") {
                  const tID = await createTicket(senderPhone, args.subject, args.details, args.user_email, args.user_name);
-                 toolResultText = tID ? `Ticket #${tID} created.` : "Failed to create ticket.";
+                 toolResultText = tID ? `Ticket #${tID} created.` : "Failed.";
               }
               else if (call.name === "check_ticket_status") toolResultText = await getTicketStatus(senderPhone);
               else if (call.name === "escalate_ticket") toolResultText = await updateTicket(args.ticket_id, args.update_text, args.is_urgent);
-              
               else if (call.name === "trigger_flow") {
                   activeFlowId = FLOW_IDS[args.flow_type];
-                  toolResultText = `Flow '${args.flow_type}' triggered.`;
-                  activeFlowCta = args.flow_type === "apply_loan" ? "Apply Now 💰" : (args.flow_type === "account_opening" ? "Open Account 📝" : "Request Card 💳");
+                  toolResultText = `Flow triggered.`;
+                  activeFlowCta = args.flow_type === "apply_loan" ? "Apply Now 💰" : "Start Now 🚀";
               }
 
+              // Round 2
               const followUpContents = [
                   ...fullConversation,
                   { role: "model", parts: [{ functionCall: call }] },
@@ -260,10 +251,23 @@ export default async function handler(req, res) {
           let messageBody = finalAiText;
           let buttons = [];
           
+          // SMART BUTTON TRUNCATOR
           if (finalAiText.includes("|||")) {
              const parts = finalAiText.split("|||");
              messageBody = parts[0].trim();
-             buttons = parts[1].split("|").map(b => b.trim()).filter(b => b.length > 0).slice(0, 3);
+             // Split -> Trim -> Slice to 3 buttons -> TRUNCATE to 20 chars
+             buttons = parts[1].split("|")
+                .map(b => b.trim())
+                .filter(b => b.length > 0)
+                .slice(0, 3)
+                .map(b => {
+                    if (b.length <= 20) return b;
+                    // Try removing emojis to save space
+                    const noEmoji = b.replace(/[^\p{L}\p{N}\s]/gu, '').trim();
+                    if (noEmoji.length <= 20) return noEmoji;
+                    // Hard truncate
+                    return b.substring(0, 19) + ".";
+                });
           }
 
           // F. SEND TO WHATSAPP
@@ -286,7 +290,7 @@ export default async function handler(req, res) {
                           name: "flow",
                           parameters: {
                               flow_message_version: "3",
-                              flow_token: "unused_token",
+                              flow_token: `${Date.now()}`, // Dynamic token
                               flow_id: activeFlowId,
                               flow_cta: activeFlowCta,
                               flow_action: "navigate",
@@ -297,7 +301,7 @@ export default async function handler(req, res) {
               };
           }
           else if (buttons.length > 0) {
-             const btnObjects = buttons.map((opt, i) => ({ type: "reply", reply: { id: `btn_${i}`, title: opt.substring(0, 20) } }));
+             const btnObjects = buttons.map((opt, i) => ({ type: "reply", reply: { id: `btn_${i}`, title: opt } }));
              payload = { messaging_product: "whatsapp", to: senderPhone, type: "interactive", interactive: { type: "button", body: { text: messageBody }, action: { buttons: btnObjects } } };
           }
           else {
@@ -306,8 +310,9 @@ export default async function handler(req, res) {
 
           if (payload.messaging_product) {
             await fetch(WHATSAPP_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
+            // Log plain text only for DB
             await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'assistant', content: messageBody });
-            await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'user', content: userInput });
+            await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'user', content: userLogText });
           }
 
         } catch (error) { console.error("CRITICAL ERROR:", error); }
