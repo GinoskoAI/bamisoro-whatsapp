@@ -90,25 +90,22 @@ CONTEXT:
 ... (keep existing prompt text) ...
 
   NATIVE FLOWS (FORMS):
-  Use these ID's ONLY when the user explicitly agrees to start the application process.
-  1. Loan Application: "928085692908196"
-  2. Card Request: "25887159307582516"
-  3. Account Opening: "1237906148250385"
+  Use these ID's ONLY when the user explicitly agrees to apply.
+  1. Loan Application: "928085692908196" (Screen: "DETAILS")
+  2. Card Request: "25887159307582516" (Screen: "CARD_SELECTION_SCREEN")
+  3. Account Opening: "1237906148250385" (Screen: "DETAILS")
 
   OUTPUT FORMAT FOR FLOWS:
-  If a user is ready to start a flow, output this JSON:
   { 
     "response": { 
       "type": "flow", 
-      "flow_id": "928085692908196", 
-      "body": "Click below to start your Loan Application.", 
-      "cta": "Apply Now",
-      "screen": "DETAILS" 
+      "flow_id": "25887159307582516", 
+      "body": "Click below to start your Card Request.", 
+      "cta": "Get Card", 
+      "screen": "CARD_SELECTION_SCREEN" 
     }, 
-    "memory_update": "User started loan application." 
+    "memory_update": "User started card request." 
   }
-  *Note: "screen" must match the first screen ID in your Flow Builder (usually "DETAILS", "START", or "QUESTION_1").
-
 `;
 
 
@@ -252,6 +249,33 @@ export default async function handler(req, res) {
                  const tID = await createTicket(senderPhone, args.subject, args.details, args.user_email, args.user_name);
                  toolResultText = tID ? `Ticket #${tID} created.` : "Failed.";
               }
+                else if (aiReply.type === "flow") {
+            payload = {
+              messaging_product: "whatsapp",
+              to: senderPhone,
+              type: "interactive",
+              interactive: {
+                type: "flow",
+                header: { type: "text", text: "ALAT Application" },
+                body: { text: aiReply.body },
+                footer: { text: "Secure by Wema" },
+                action: {
+                  name: "flow",
+                  parameters: {
+                    flow_message_version: "3",
+                    flow_token: "unused_token",
+                    flow_id: aiReply.flow_id,
+                    flow_cta: aiReply.cta || "Start",
+                    flow_action: "navigate",
+                    flow_action_payload: {
+                      screen: aiReply.screen || "DETAILS" 
+                    }
+                  }
+                }
+              }
+            };
+          }
+                
               else if (call.name === "check_ticket_status") toolResultText = await getTicketStatus(senderPhone);
               else if (call.name === "escalate_ticket") toolResultText = await updateTicket(args.ticket_id, args.update_text, args.is_urgent);
               else if (call.name === "trigger_flow") {
