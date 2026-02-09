@@ -32,6 +32,46 @@ async function supabaseRequest(endpoint, method, body = null) {
   } catch (err) { return null; }
 }
 
+// --- HELPER: Download & Transcribe Voice Note ---
+async function processVoiceNote(mediaId) {
+  try {
+    // 1. Get the Media URL from WhatsApp
+    const urlRes = await fetch(`https://graph.facebook.com/v21.0/${mediaId}`, {
+       headers: { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` }
+    });
+    const urlJson = await urlRes.json();
+    if (!urlJson.url) return "[Error: Could not retrieve audio URL]";
+
+    // 2. Download the Audio Binary
+    const mediaRes = await fetch(urlJson.url, {
+       headers: { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` }
+    });
+    const arrayBuffer = await mediaRes.arrayBuffer();
+    const base64Audio = Buffer.from(arrayBuffer).toString('base64');
+
+    // 3. Send to Gemini for Transcription (Multimodal)
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+    const payload = {
+       contents: [{
+         parts: [
+           { text: "Transcribe this WhatsApp voice note exactly. Output ONLY the text. If it is empty or silent, say '[Silence]'." },
+           { inlineData: { mimeType: "audio/ogg", data: base64Audio } }
+         ]
+       }]
+    };
+    
+    const transRes = await fetch(geminiUrl, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+    const transData = await transRes.json();
+    
+    // Return the transcribed text so the bot treats it like a normal message
+    return transData.candidates?.[0]?.content?.parts?.[0]?.text || "[Audio Transcription Failed]";
+  } catch (e) {
+    console.error("Audio Error:", e);
+    return "[User sent a voice note that could not be processed]";
+  }
+}
+
+
 // ============================================================
 // 2. SYSTEM PROMPT (FULL UNABRIDGED)
 // ============================================================
