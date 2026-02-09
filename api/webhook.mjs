@@ -213,6 +213,12 @@ export default async function handler(req, res) {
       
       let userInput = "";
       if (message.type === "text") userInput = message.text.body;
+        else if (message.type === "audio") {
+          // *** VOICE NOTE LOGIC ***
+          // We wait for the helper to download, send to Gemini, and return text.
+          userInput = await processVoiceNote(message.audio.id);
+          console.log(`🎤 Transcribed Voice Note: "${userInput}"`);
+      }
       else if (message.type === "interactive") {
          if (message.interactive.type === "nfm_reply") {
              const responseJson = JSON.parse(message.interactive.nfm_reply.response_json);
