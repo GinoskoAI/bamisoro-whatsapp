@@ -50,7 +50,7 @@ async function processVoiceNote(mediaId) {
     const base64Audio = Buffer.from(arrayBuffer).toString('base64');
 
     // 3. Send to Gemini for Transcription (Multimodal)
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
     const payload = {
        contents: [{
          parts: [
@@ -253,7 +253,7 @@ export default async function handler(req, res) {
           const fullConversation = [...chatHistory, { role: "user", parts: [{ text: contextString }] }];
 
           // C. CALL GEMINI (2.5 FLASH)
-          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`;
+          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
           
           let apiBody = {
             contents: fullConversation,
