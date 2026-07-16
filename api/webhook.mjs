@@ -1,5 +1,5 @@
 // api/webhook.mjs
-// VERSION: FINAL ALAT BUDDY - FULL PERSONA + FLOWS + TOOLS  
+// VERSION: ENTERPRISE EDITION - COGNITIVE TTS + CONTEXTUAL QSTASH NUDGES
 
 import { createTicket, getTicketStatus, updateTicket } from './utils/freshdesk.mjs';
 
@@ -32,24 +32,121 @@ async function supabaseRequest(endpoint, method, body = null) {
   } catch (err) { return null; }
 }
 
+// --- HELPER: Upload Audio to Supabase Bucket ---
+async function uploadAudioToSupabase(base64Data, filename) {
+  const bucket = 'voice-notes';
+  const url = `${process.env.SUPABASE_URL}/storage/v1/object/${bucket}/${filename}`;
+  const buffer = Buffer.from(base64Data, 'base64');
+  const headers = {
+    'apikey': process.env.SUPABASE_KEY,
+    'Authorization': `Bearer ${process.env.SUPABASE_KEY}`,
+    'Content-Type': 'audio/ogg'
+  };
+  try {
+    await fetch(url, { method: 'POST', headers, body: buffer });
+    return `${process.env.SUPABASE_URL}/storage/v1/object/public/${bucket}/${filename}`;
+  } catch (e) {
+    console.error("Supabase Upload Error:", e);
+    return null;
+  }
+}
+
+// --- HELPER: Normalize Text for Clean TTS Output ---
+function normalizeTextForTTS(text) {
+  let cleaned = text.split("|||")[0]; // Strip WhatsApp buttons
+  cleaned = cleaned.replace(/[\u{1F300}-\u{1F6FF}]/gu, ''); // Strip emojis
+  cleaned = cleaned.replace(/\*/g, ''); // Strip markdown asterisks
+  return cleaned.trim();
+}
+
+// --- HELPER: Google Cloud TTS (Nigerian English accent) ---
+async function callGoogleTTS(text) {
+  const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${process.env.GEMINI_API_KEY}`;
+  const payload = {
+    input: { text: text },
+    voice: { languageCode: 'en-NG', name: 'en-NG-Standard-A' }, // Natural Nigerian English
+    audioConfig: { audioEncoding: 'OGG_OPUS' } // Natively supported by WhatsApp
+  };
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error?.message || "Google TTS Failed");
+  return data.audioContent;
+}
+
+// --- HELPER: Spitch TTS (Nigerian Regional Languages) ---
+async function callSpitchTTS(text, languageCode) {
+  const SPITCH_URL = 'https://api.spitch.ai/tts/v1/synthesize';
+  const localeMap = { 'yo': 'yo-NG', 'ig': 'ig-NG', 'ha': 'ha-NG', 'pcm': 'pcm-NG' };
+  
+  const payload = {
+    text: text,
+    locale: localeMap[languageCode] || 'yo-NG',
+    voice_id: 'default',
+    audio_format: 'ogg'
+  };
+  const response = await fetch(SPITCH_URL, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.SPITCH_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) throw new Error("Spitch TTS Failed");
+  const data = await response.json();
+  return data.audio_data;
+}
+
+// --- HELPER: TTS Router ---
+async function generateVoiceResponse(text, languageCode) {
+  const cleanedText = normalizeTextForTTS(text);
+  const NIGERIAN_LANGUAGES = ['yo', 'ig', 'ha', 'pcm'];
+  
+  if (NIGERIAN_LANGUAGES.includes(languageCode)) {
+    return await callSpitchTTS(cleanedText, languageCode);
+  } else {
+    return await callGoogleTTS(cleanedText);
+  }
+}
+
+// --- HELPER: Schedule Nudge (Upstash QStash) ---
+async function scheduleNudge(host, senderPhone, isExplicit, delay) {
+  if (!process.env.QSTASH_TOKEN) return;
+  try {
+    await fetch(`https://qstash.upstash.io/v2/publish/https://${host}/api/queue/nudge`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.QSTASH_TOKEN}`,
+        'Content-Type': 'application/json',
+        'Upstash-Delay': delay
+      },
+      body: JSON.stringify({ senderPhone, isExplicit })
+    });
+    console.log(`⏳ Scheduled nudge in ${delay} (Explicit: ${isExplicit})`);
+  } catch (err) {
+    console.error("QStash Scheduling Error:", err);
+  }
+}
+
 // --- HELPER: Download & Transcribe Voice Note ---
 async function processVoiceNote(mediaId) {
   try {
-    // 1. Get the Media URL from WhatsApp
     const urlRes = await fetch(`https://graph.facebook.com/v21.0/${mediaId}`, {
        headers: { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` }
     });
     const urlJson = await urlRes.json();
     if (!urlJson.url) return "[Error: Could not retrieve audio URL]";
 
-    // 2. Download the Audio Binary
     const mediaRes = await fetch(urlJson.url, {
        headers: { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}` }
     });
     const arrayBuffer = await mediaRes.arrayBuffer();
     const base64Audio = Buffer.from(arrayBuffer).toString('base64');
 
-    // 3. Send to Gemini for Transcription (Multimodal)
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
     const payload = {
        contents: [{
@@ -63,14 +160,12 @@ async function processVoiceNote(mediaId) {
     const transRes = await fetch(geminiUrl, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
     const transData = await transRes.json();
     
-    // Return the transcribed text so the bot treats it like a normal message
     return transData.candidates?.[0]?.content?.parts?.[0]?.text || "[Audio Transcription Failed]";
   } catch (e) {
     console.error("Audio Error:", e);
     return "[User sent a voice note that could not be processed]";
   }
 }
-
 
 // ============================================================
 // 2. SYSTEM PROMPT (FULL UNABRIDGED)
@@ -214,7 +309,6 @@ export default async function handler(req, res) {
       if (message.type === "text") userInput = message.text.body;
         else if (message.type === "audio") {
           // *** VOICE NOTE LOGIC ***
-          // We wait for the helper to download, send to Gemini, and return text.
           userInput = await processVoiceNote(message.audio.id);
           console.log(`🎤 Transcribed Voice Note: "${userInput}"`);
       }
@@ -237,8 +331,8 @@ export default async function handler(req, res) {
           let currentProfile = profileData && profileData.length > 0 ? profileData[0] : {};
 
           if (!currentProfile.phone) {
-            await supabaseRequest('user_profiles', 'POST', { phone: senderPhone, name: whatsappName });
-            currentProfile = { name: whatsappName };
+            await supabaseRequest('user_profiles', 'POST', { phone: senderPhone, name: whatsappName, voice_pref: 'text' });
+            currentProfile = { name: whatsappName, voice_pref: 'text' };
           }
 
           const historyData = await supabaseRequest(`messages?user_phone=eq.${senderPhone}&order=id.desc&limit=8&select=role,content`, 'GET') || [];
@@ -247,7 +341,33 @@ export default async function handler(req, res) {
             parts: [{ text: msg.content }]
           }));
 
-          // B. PREPARE PROMPT
+          // B. PREPARE DYNAMIC JSON RUNTIME RULES
+          const RUNTIME_PROMPT_INJECT = `
+          ${SYSTEM_PROMPT}
+
+          STRICT MULTI-LINGUAL VOICE & NUDGE RULES:
+          1. Detect the user's language. You must respond in the same language. 
+             If they type or speak in Yoruba ('yo'), Igbo ('ig'), Hausa ('ha'), Pidgin ('pcm'), or English ('en'), set the language code accordingly.
+          2. Ask the user if they prefer to receive replies as Voice Notes (audio) or normal Text. 
+             - If they explicitly opt-in to audio (e.g., "send voice note" or "reply in voice"), set "voice_preference" to "audio".
+             - If they want text only, set "voice_preference" to "text".
+             - Always recommend a voice response by saying: "Would you like me to answer this via Voice Note? 🎙️"
+          3. DYNAMIC NUDGING (QStash):
+             - If the user goes silent mid-order or during support logging, specify a "nudge_delay" (e.g., "5m", "15m", "30m", "1h", "2h").
+             - If they ask for a reminder or agree to be nudged later (e.g. "Remind me in 2 hours"), set "nudge_delay" to "2h" (or requested duration) and set "is_explicit_reminder" to true.
+             - If the user says goodbye, finishes the transaction, or doesn't need a nudge, set "nudge_delay" to null.
+
+          STRICT OUTPUT SCHEMA:
+          You MUST output a valid JSON object matching this structure exactly. No markdown wrapping.
+          {
+            "response": "Your normal response text here. (Continue using your '|||' button system if buttons are needed!)",
+            "language": "en" | "yo" | "ig" | "ha" | "pcm",
+            "voice_preference": "audio" | "text" | null,
+            "nudge_delay": "5m" | "15m" | "30m" | "1h" | "2h" | null,
+            "is_explicit_reminder": true | false
+          }
+          `;
+
           const contextString = `USER: ${currentProfile.name} (${senderPhone})\nINPUT: "${userInput}"`;
           const fullConversation = [...chatHistory, { role: "user", parts: [{ text: contextString }] }];
 
@@ -257,13 +377,11 @@ export default async function handler(req, res) {
           let apiBody = {
             contents: fullConversation,
             tools: GEMINI_TOOLS,
-            system_instruction: { parts: [{ text: SYSTEM_PROMPT }] }
+            system_instruction: { parts: [{ text: RUNTIME_PROMPT_INJECT }] },
+            generationConfig: { responseMimeType: "application/json" }
           };
 
           let geminiResponse = await fetch(geminiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(apiBody) });
-          
-          if (!geminiResponse.ok) console.error("Gemini Error:", await geminiResponse.text());
-
           let geminiData = await geminiResponse.json();
           let candidate = geminiData.candidates?.[0]?.content?.parts?.[0];
           
@@ -283,7 +401,6 @@ export default async function handler(req, res) {
               }
               else if (call.name === "check_ticket_status") toolResultText = await getTicketStatus(senderPhone);
               else if (call.name === "escalate_ticket") toolResultText = await updateTicket(args.ticket_id, args.update_text, args.is_urgent);
-              
               else if (call.name === "trigger_flow") {
                   activeFlowId = FLOW_IDS[args.flow_type];
                   toolResultText = `Flow '${args.flow_type}' triggered.`;
@@ -300,21 +417,52 @@ export default async function handler(req, res) {
               geminiData = await geminiResponse.json();
           }
 
-          // E. PARSE RESPONSE
-          let finalAiText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "System Error";
-          let messageBody = finalAiText;
+          // E. PARSE STRUCTURED JSON RESPONSE
+          let rawAiText = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+          let aiOutput;
+          try {
+              const firstBrace = rawAiText.indexOf('{');
+              const lastBrace = rawAiText.lastIndexOf('}');
+              if (firstBrace !== -1 && lastBrace !== -1) {
+                  aiOutput = JSON.parse(rawAiText.substring(firstBrace, lastBrace + 1));
+              } else {
+                  throw new Error("Missing JSON payload boundary");
+              }
+          } catch (err) {
+              aiOutput = { response: rawAiText, language: 'en', voice_preference: null, nudge_delay: null, is_explicit_reminder: false };
+          }
+
+          let messageBody = aiOutput.response || "System Error";
           let buttons = [];
           
-          if (finalAiText.includes("|||")) {
-             const parts = finalAiText.split("|||");
+          if (messageBody.includes("|||")) {
+             const parts = messageBody.split("|||");
              messageBody = parts[0].trim();
              buttons = parts[1].split("|").map(b => b.trim()).filter(b => b.length > 0).slice(0, 3);
           }
 
-          // F. SEND TO WHATSAPP
+          // F. PROCESS COGNITIVE VOICE PREFERENCE
+          let activeVoicePreference = currentProfile.voice_pref || 'text';
+          if (aiOutput.voice_preference) {
+              activeVoicePreference = aiOutput.voice_preference;
+              await supabaseRequest(`user_profiles?phone=eq.${senderPhone}`, 'PATCH', { voice_pref: activeVoicePreference });
+          }
+
+          // G. COGNITIVE SPEECH SYNTHESIS ROUTING
+          let generatedVoiceUrl = null;
+          if (activeVoicePreference === 'audio') {
+              try {
+                  const base64Audio = await generateVoiceResponse(messageBody, aiOutput.language || 'en');
+                  const filename = `samson_${senderPhone}_${Date.now()}.ogg`;
+                  generatedVoiceUrl = await uploadAudioToSupabase(base64Audio, filename);
+              } catch (ttsErr) {
+                  console.error("Cognitive Speech Synthesis failed:", ttsErr);
+              }
+          }
+
+          // H. SEND MESSAGE TO WHATSAPP
           const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
           const HEADERS = { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' };
-          
           let payload = {};
 
           if (activeFlowId) {
@@ -350,9 +498,27 @@ export default async function handler(req, res) {
           }
 
           if (payload.messaging_product) {
+            // First send the text/interactive options payload
             await fetch(WHATSAPP_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
             await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'assistant', content: messageBody });
             await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'user', content: userInput });
+
+            // If voice preference is audio, immediately follow up with the audio message
+            if (generatedVoiceUrl) {
+                const audioPayload = {
+                    messaging_product: "whatsapp",
+                    to: senderPhone,
+                    type: "audio",
+                    audio: { link: generatedVoiceUrl }
+                };
+                await fetch(WHATSAPP_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(audioPayload) });
+            }
+          }
+
+          // I. CONTEXTUAL NUDGING SCHEDULER (UPSTASH QSTASH)
+          if (aiOutput.nudge_delay) {
+              const host = req.headers.host || 'your-domain.vercel.app';
+              await scheduleNudge(host, senderPhone, aiOutput.is_explicit_reminder || false, aiOutput.nudge_delay);
           }
 
         } catch (error) { console.error("CRITICAL ERROR:", error); }
