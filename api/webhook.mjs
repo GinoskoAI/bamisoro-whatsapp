@@ -59,59 +59,61 @@ function normalizeTextForTTS(text) {
   return cleaned.trim();
 }
 
-// --- HELPER: Google Cloud TTS (Nigerian English accent) ---
-async function callGoogleTTS(text) {
-  const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${process.env.GEMINI_API_KEY}`;
-  const payload = {
-    input: { text: text },
-    voice: { languageCode: 'en-NG', name: 'en-NG-Standard-A' }, // Natural Nigerian English
-    audioConfig: { audioEncoding: 'OGG_OPUS' } // Natively supported by WhatsApp
-  };
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error?.message || "Google TTS Failed");
-  return data.audioContent;
-}
-
-// --- HELPER: Spitch TTS (Nigerian Regional Languages) ---
-async function callSpitchTTS(text, languageCode) {
+// --- HELPER: Unified Spitch TTS (All Languages) ---
+async function generateVoiceResponse(text, languageCode) {
   const SPITCH_URL = 'https://api.spitch.ai/tts/v1/synthesize';
-  const localeMap = { 'yo': 'yo-NG', 'ig': 'ig-NG', 'ha': 'ha-NG', 'pcm': 'pcm-NG' };
-  
-  const payload = {
-    text: text,
-    locale: localeMap[languageCode] || 'yo-NG',
-    voice_id: 'default',
-    audio_format: 'ogg'
+
+  // Spitch Voice Configuration
+  const spitchConfig = {
+    en: {
+      language: 'en',
+      voice: 'jude'        // Masculine conversational voice
+    },
+    yo: {
+      language: 'yo',
+      voice: 'segun'       // Masculine Yoruba
+    },
+    ig: {
+      language: 'ig',
+      voice: 'obinna'      // Masculine Igbo
+    },
+    ha: {
+      language: 'ha',
+      voice: 'hasan'       // Masculine Hausa
+    },
+    pcm: {
+      language: 'pcm',
+      voice: 'justice'     // Masculine Nigerian Pidgin
+    }
   };
+
+  const config = spitchConfig[languageCode] || spitchConfig.en;
+
+  const payload = {
+    text: normalizeTextForTTS(text),
+    language: config.language,
+    voice: config.voice,
+    format: 'ogg_opus'
+  };
+
   const response = await fetch(SPITCH_URL, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${process.env.SPITCH_API_KEY}`,
+      Authorization: `Bearer ${process.env.SPITCH_API_KEY}`,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify(payload)
   });
-  if (!response.ok) throw new Error("Spitch TTS Failed");
-  const data = await response.json();
-  return data.audio_data;
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  // Current API returns audio bytes
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer).toString('base64');
 }
 
-// --- HELPER: TTS Router ---
-async function generateVoiceResponse(text, languageCode) {
-  const cleanedText = normalizeTextForTTS(text);
-  const NIGERIAN_LANGUAGES = ['yo', 'ig', 'ha', 'pcm'];
-  
-  if (NIGERIAN_LANGUAGES.includes(languageCode)) {
-    return await callSpitchTTS(cleanedText, languageCode);
-  } else {
-    return await callGoogleTTS(cleanedText);
-  }
-}
 
 // --- HELPER: Schedule Nudge (Upstash QStash) ---
 async function scheduleNudge(host, senderPhone, isExplicit, delay) {
