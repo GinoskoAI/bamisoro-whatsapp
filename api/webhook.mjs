@@ -348,11 +348,12 @@ export default async function handler(req, res) {
           STRICT MULTI-LINGUAL VOICE & NUDGE RULES:
           1. Detect the user's language. You must respond in the same language. 
              If they type or speak in Yoruba ('yo'), Igbo ('ig'), Hausa ('ha'), Pidgin ('pcm'), or English ('en'), set the language code accordingly.
-          2. Ask the user if they prefer to receive replies as Voice Notes (audio) or normal Text. 
+          2. YOU HAVE VOCAL CAPABILITIES. Never say "I am an AI and cannot send voice notes." You are integrated with advanced TTS engines.
+          3. Ask the user if they prefer to receive replies as Voice Notes (audio) or normal Text. 
              - If they explicitly opt-in to audio (e.g., "send voice note" or "reply in voice"), set "voice_preference" to "audio".
              - If they want text only, set "voice_preference" to "text".
              - Always recommend a voice response by saying: "Would you like me to answer this via Voice Note? 🎙️"
-          3. DYNAMIC NUDGING (QStash):
+          4. DYNAMIC NUDGING (QStash):
              - If the user goes silent mid-order or during support logging, specify a "nudge_delay" (e.g., "5m", "15m", "30m", "1h", "2h").
              - If they ask for a reminder or agree to be nudged later (e.g. "Remind me in 2 hours"), set "nudge_delay" to "2h" (or requested duration) and set "is_explicit_reminder" to true.
              - If the user says goodbye, finishes the transaction, or doesn't need a nudge, set "nudge_delay" to null.
