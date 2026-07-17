@@ -34,18 +34,29 @@ export default async function handler(req, res) {
       return res.status(200).json({ status: "skipped_user_replied_already" });
     }
 
-    // 2. Build history payload
+    // 2. Fetch tone preference
+    const profileData = await supabaseRequest(`user_profiles?phone=eq.${senderPhone}&select=tone_pref`, 'GET') || [];
+    const tone = (profileData.length > 0 && profileData[0].tone_pref) ? profileData[0].tone_pref : 'casual';
+
+    // 3. Build history payload
     const fullHistory = await supabaseRequest(`messages?user_phone=eq.${senderPhone}&order=id.desc&limit=8&select=role,content`, 'GET') || [];
     const chatHistory = fullHistory.reverse().map(msg => ({
       role: msg.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: msg.content }]
     }));
 
-    // 3. Generate reminder with Gemini
+    // 4. Generate reminder with Gemini adapting to user's tone_pref
     const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
     const payload = {
       contents: [...chatHistory, { role: "user", parts: [{ text: `Generate reminder message. was_explicit: ${isExplicit}` }] }],
-      system_instruction: { parts: [{ text: NUDGE_PROMPT }] },
+      system_instruction: { 
+        parts: [{ 
+          text: `
+            ${NUDGE_PROMPT}
+            Adopt the customer's preferred tone: **${tone.toUpperCase()}**.
+          ` 
+        }] 
+      },
       generationConfig: { responseMimeType: "application/json" }
     };
 
