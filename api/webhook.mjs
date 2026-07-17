@@ -254,19 +254,25 @@ export default async function handler(req, res) {
             currentProfile = { name: whatsappName, tone_pref: null };
           }
 
-          // --- TONE INITIALIZATION INTERCEPT ---
+         // --- TONE INITIALIZATION INTERCEPT ---
           const WHATSAPP_URL = `https://graph.facebook.com/v21.0/${process.env.PHONE_NUMBER_ID}/messages`;
           const HEADERS = { 'Authorization': `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`, 'Content-Type': 'application/json' };
 
-          const validTones = ["Casual", "Professional", "Concise", "Detailed"];
-          const toneClean = userInput.replace(/[\u{1F300}-\u{1F6FF}]/gu, '').trim(); // Remove emojis
-
           if (!currentProfile.tone_pref) {
-            if (validTones.includes(toneClean)) {
-              // User has selected their tone preference! Save it and continue
-              await supabaseRequest(`user_profiles?phone=eq.${senderPhone}`, 'PATCH', { tone_pref: toneClean.toLowerCase() });
-              currentProfile.tone_pref = toneClean.toLowerCase();
-              userInput = "Hello"; // Force conversation initialization once tone is set
+            const inputLower = userInput.toLowerCase();
+            let selectedTone = null;
+
+            // Robust keyword matching (ignores emojis and exact casing)
+            if (inputLower.includes("casual")) selectedTone = "casual";
+            else if (inputLower.includes("prof")) selectedTone = "professional";
+            else if (inputLower.includes("concise")) selectedTone = "concise";
+            else if (inputLower.includes("detail")) selectedTone = "detailed";
+
+            if (selectedTone) {
+              // User has selected their tone preference! Save it and kick off the chat.
+              await supabaseRequest(`user_profiles?phone=eq.${senderPhone}`, 'PATCH', { tone_pref: selectedTone });
+              currentProfile.tone_pref = selectedTone;
+              userInput = "Hello! I have set my tone. Please introduce yourself and show me the main menu."; 
             } else {
               // Send the tone preference selector
               const tonePayload = {
@@ -281,7 +287,6 @@ export default async function handler(req, res) {
                       { type: "reply", reply: { id: "tone_casual", title: "Casual 😊" } },
                       { type: "reply", reply: { id: "tone_prof", title: "Professional 💼" } },
                       { type: "reply", reply: { id: "tone_concise", title: "Concise ⚡" } }
-                      // Note: WhatsApp button limit is 3. "Detailed" will run as normal text input if preferred.
                     ]
                   }
                 }
@@ -311,7 +316,7 @@ export default async function handler(req, res) {
           2. **DYNAMIC NUDGING (QSTASH):**
              - If the user goes silent mid-order or mid-support ticket creation, schedule a background check-in by setting "nudge_delay" (e.g., "5m", "15m", "30m", "1h", "2h").
              - If the user requests a follow-up or says "remind me in 2 hours", schedule it by setting "nudge_delay" to "2h" (or requested duration) and set "is_explicit_reminder" to true.
-             - If the transaction is completed, cancelled, or the conversation naturally concludes, set "nudge_delay" to null.
+             - If the transaction is completed, cancelled, or the conversation naturally concludes, set "nudge_delay" to "none".
           `;
 
           const contextString = `USER: ${currentProfile.name} (${senderPhone})\nINPUT: "${userInput}"`;
@@ -330,13 +335,26 @@ export default async function handler(req, res) {
                 type: "OBJECT",
                 properties: {
                   response: { type: "STRING" },
-                  nudge_delay: { type: "STRING", nullable: true },
+                  nudge_delay: { type: "STRING" }, // Replaced nullable with enforced string
                   is_explicit_reminder: { type: "BOOLEAN" }
                 },
-                required: ["response", "is_explicit_reminder"]
+                required: ["response", "nudge_delay", "is_explicit_reminder"]
               }
             }
           };
+
+          let geminiResponse = await fetch(geminiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(apiBody) });
+          let geminiData = {};
+
+          // Safe error parsing to prevent fatal double-read crash
+          if (!geminiResponse.ok) {
+              const errText = await geminiResponse.text();
+              console.error("Gemini Error:", errText);
+          } else {
+              geminiData = await geminiResponse.json();
+          }
+          
+          let candidate = geminiData.candidates?.[0]?.content?.parts?.[0];
 
           let geminiResponse = await fetch(geminiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(apiBody) });
           if (!geminiResponse.ok) console.error("Gemini Error:", await geminiResponse.text());
@@ -442,15 +460,7 @@ export default async function handler(req, res) {
           }
 
           // G. CONTEXTUAL NUDGING SCHEDULER (UPSTASH QSTASH)
-          if (aiOutput.nudge_delay) {
+          if (aiOutput.nudge_delay && aiOutput.nudge_delay !== "none") {
               const host = req.headers.host || 'your-domain.vercel.app';
               await scheduleNudge(host, senderPhone, aiOutput.is_explicit_reminder || false, aiOutput.nudge_delay);
           }
-
-        } catch (error) { console.error("CRITICAL ERROR:", error); }
-      }
-    }
-    return res.status(200).json({ status: "ok" });
-  }
-  return res.status(405).json({ error: 'Method Not Allowed' });
-}
