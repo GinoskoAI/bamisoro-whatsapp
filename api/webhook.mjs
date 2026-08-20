@@ -32,6 +32,76 @@ async function supabaseRequest(endpoint, method, body = null) {
   } catch (err) { return null; }
 }
 
+// ============================================================
+// BAMISORO CHAT INTELLIGENCE BRIDGE
+// The Wema/ALAT bot mirrors every inbound customer message + its own
+// reply into the wacrm inbox so the human team can monitor/take over.
+// It also pulls its live Nola system prompt + model + tools from wacrm
+// (editable from Settings → Bamisoro Chat), falling back to the
+// hardcoded SYSTEM_PROMPT below when the bridge is not configured.
+// ============================================================
+const BAMISORO_CHAT_SECRET = process.env.BAMISORO_CHAT_SECRET;
+const BAMISORO_CHAT_CONFIG_URL =
+  process.env.BAMISORO_CHAT_CONFIG_URL || 'https://wacrm-dusky-chi.vercel.app/api/bamisoro-chat/config';
+const BAMISORO_CHAT_MIRROR_URL =
+  process.env.BAMISORO_CHAT_MIRROR_URL || 'https://wacrm-dusky-chi.vercel.app/api/bamisoro-chat/mirror';
+
+// In-memory config cache (60s) so we don't fetch on every message.
+let _bamisoroConfigCache = { value: null, ts: 0 };
+const BAMISORO_CONFIG_TTL_MS = 60 * 1000;
+
+async function fetchBamisoroConfig() {
+  const now = Date.now();
+  if (_bamisoroConfigCache.value && now - _bamisoroConfigCache.ts < BAMISORO_CONFIG_TTL_MS) {
+    return _bamisoroConfigCache.value;
+  }
+  if (!BAMISORO_CHAT_SECRET) return null;
+  try {
+    const res = await fetch(BAMISORO_CHAT_CONFIG_URL, {
+      headers: { 'x-bamisoro-chat-secret': BAMISORO_CHAT_SECRET, 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) throw new Error('config status ' + res.status);
+    const json = await res.json();
+    const cfg = json && json.data;
+    if (cfg && typeof cfg === 'object') {
+      _bamisoroConfigCache = { value: cfg, ts: now };
+      return cfg;
+    }
+  } catch (e) {
+    console.error('[bamisoro-chat] config fetch failed, using fallback prompt:', e && e.message);
+  }
+  return null;
+}
+
+// Fire-and-forget: never blocks the WhatsApp reply, never throws.
+async function forwardToWacrm(phone, name, customerText, botText, customerExternalId) {
+  if (!BAMISORO_CHAT_SECRET) return; // bridge not configured on this deploy
+  try {
+    await fetch(BAMISORO_CHAT_MIRROR_URL, {
+      method: 'POST',
+      headers: {
+        'x-bamisoro-chat-secret': BAMISORO_CHAT_SECRET,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        phone,
+        name,
+        messages: [
+          { role: 'customer', text: customerText, external_id: customerExternalId || null, timestamp: null },
+          {
+            role: 'bot',
+            text: botText,
+            external_id: 'bamisoro_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      }),
+    });
+  } catch (e) {
+    console.error('[bamisoro-chat] mirror forward failed:', e && e.message);
+  }
+}
+
 // --- HELPER: Download & Transcribe Voice Note ---
 async function processVoiceNote(mediaId) {
   try {
@@ -231,12 +301,21 @@ export default async function handler(req, res) {
           const fullConversation = [...chatHistory, { role: "user", parts: [{ text: contextString }] }];
 
           // C. CALL GEMINI (2.5 FLASH)
-          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+          // Pull the live Nola config from wacrm (editable from Settings →
+          // Bamisoro Chat). Falls back to the hardcoded SYSTEM_PROMPT / model
+          // if the bridge is unconfigured or the fetch fails.
+          const bamisoroCfg = await fetchBamisoroConfig();
+          const activeSystemPrompt = (bamisoroCfg && bamisoroCfg.system_prompt) || SYSTEM_PROMPT;
+          const activeModel = (bamisoroCfg && bamisoroCfg.model) || 'gemini-2.5-flash';
+          const buttonDelimiter =
+            (bamisoroCfg && bamisoroCfg.meta && bamisoroCfg.meta.button_delimiter) || '|||';
+
+          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${activeModel}:generateContent?key=${process.env.GEMINI_API_KEY}`;
 
           let apiBody = {
             contents: fullConversation,
             tools: GEMINI_TOOLS,
-            system_instruction: { parts: [{ text: SYSTEM_PROMPT }] }
+            system_instruction: { parts: [{ text: activeSystemPrompt }] }
           };
 
           let geminiResponse = await fetch(geminiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(apiBody) });
@@ -284,8 +363,8 @@ export default async function handler(req, res) {
           let messageBody = finalAiText;
           let buttons = [];
 
-          if (finalAiText.includes("|||")) {
-             const parts = finalAiText.split("|||");
+          if (finalAiText.includes(buttonDelimiter)) {
+             const parts = finalAiText.split(buttonDelimiter);
              messageBody = parts[0].trim();
              buttons = parts[1].split("|").map(b => b.trim()).filter(b => b.length > 0).slice(0, 3);
           }
@@ -332,6 +411,10 @@ export default async function handler(req, res) {
             await fetch(WHATSAPP_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(payload) });
             await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'assistant', content: messageBody });
             await supabaseRequest('messages', 'POST', { user_phone: senderPhone, role: 'user', content: userInput });
+
+            // Mirror both messages into the wacrm inbox (Bamisoro Chat
+            // Intelligence) — fire-and-forget, must not block the reply.
+            void forwardToWacrm(senderPhone, whatsappName, userInput, messageBody, message.id || null);
           }
 
         } catch (error) { console.error("CRITICAL ERROR:", error); }
